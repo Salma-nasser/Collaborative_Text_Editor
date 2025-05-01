@@ -1,12 +1,15 @@
 package Computer.Engineering.Google.Text.Editor.model;
 
 import java.util.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class CrdtBuffer {
     private List<CrdtNode> nodes;
     private String siteId;
     private int clock;
     private Set<String> deletedSet;
+    Logger logger = LoggerFactory.getLogger(CrdtBuffer.class);
 
     public CrdtBuffer(String siteId) {
         this.siteId = siteId;
@@ -19,86 +22,123 @@ public class CrdtBuffer {
     /*
      * parent is my previous char
      * clock accor to user end count
-     * counter 
-     */ 
+     * counter
+     */
 
-    // Insert character
     public void insert(char charValue, String parentId) {
         clock++;
-        int counter = 0; // Default counter for new inserts
+        int counter = 0;
 
-        // Find correct counter value for same parent
-        // site id is hal 2na nfs el45s ely 2bly wla 
+        // Track existing counters for the parentId
+        Set<Integer> existingCounters = new HashSet<>();
         for (CrdtNode node : nodes) {
             if (node.getParentId().equals(parentId)) {
-                counter = counter + 1;
+                existingCounters.add(node.getCounter());
             }
+        }
+
+        // Ensure uniqueness by finding the smallest available counter
+        while (existingCounters.contains(counter)) {
+            counter++;
         }
 
         CrdtNode newNode = new CrdtNode(siteId, clock, counter, parentId, charValue);
         nodes.add(newNode);
+
         Collections.sort(nodes); // Maintain order
-        System.out.println("countet: "+counter);
+
+        logger.debug("Inserted node: " + newNode);
     }
-    // in printing on editor check if it deleted so it is not printed
-    // Delete character by marking it as a tombstone
-    public void delete(String siteId , int clock) {
+
+    public void merge(List<CrdtNode> incomingNodes, List<CrdtNode> incomingDeleted) {
+        Map<String, CrdtNode> nodeMap = new HashMap<>();
+
         for (CrdtNode node : nodes) {
-            if (node.getSiteId()==(siteId) && node.getClock()==(clock)) {
-                System.out.println("deleted");
-                node.markDeleted();
-                deletedSet.add(siteId);
-                break;
+            nodeMap.put(node.getUniqueId(), node);
+        }
+
+        for (CrdtNode incoming : incomingNodes) {
+            String id = incoming.getUniqueId();
+
+            if (!nodeMap.containsKey(id)) {
+                nodes.add(incoming);
+            } else {
+                CrdtNode local = nodeMap.get(id);
+                if (incoming.isDeleted()) {
+                    local.markDeleted(); // Correctly mark deletion
+                }
             }
         }
+        for (CrdtNode deletedNode : incomingDeleted) {
+            if (nodeMap.containsKey(deletedNode.getUniqueId())) {
+                nodeMap.get(deletedNode.getUniqueId()).markDeleted();
+            }
+        }
+        System.out.println("Merging incoming nodes: " + incomingNodes.size());
+        System.out.println("Before merge: " + nodes.size() + " local nodes");
+
+        Collections.sort(nodes);
     }
 
-    // // Merge incoming changes from another peer
-    // public void merge(List<CrdtNode> incomingNodes, Set<String> incomingDeleted) {
-    //     for (CrdtNode node : incomingNodes) {
-    //         if (!nodes.contains(node)) {
-    //             nodes.add(node);
-    //         }
-    //     }
-    //     deletedSet.addAll(incomingDeleted);
-    //     Collections.sort(nodes);
-    // }
-
-    //Get document as a string (ignoring deleted nodes)
     public String getDocument() {
         StringBuilder doc = new StringBuilder();
+
+        nodes.sort(Comparator.comparingInt(CrdtNode::getClock)); // Ensures correct order
+
         for (CrdtNode node : nodes) {
             if (!node.isDeleted()) {
                 doc.append(node.getCharValue());
             }
         }
+
         return doc.toString();
+    }
+
+    // Helper method to find a node's ID by its position
+    public String getNodeIdAtPosition(int position) {
+        int currentPos = 0;
+        for (CrdtNode node : nodes) {
+            if (!node.isDeleted()) {
+                if (currentPos == position) {
+                    return node.getUniqueId();
+                }
+                currentPos++;
+            }
+        }
+        return "0"; // Default to beginning
+    }
+
+    public List<CrdtNode> getAllNodes() {
+        return nodes;
+    }
+
+    public List<CrdtNode> getDeletedNodes() {
+        return nodes.stream().filter(CrdtNode::isDeleted).toList();
+    }
+
+    public void delete(String siteId, int clock) {
+        for (CrdtNode node : nodes) {
+            if (node.getSiteId().equals(siteId) && node.getClock() == clock) {
+                node.markDeleted();
+                deletedSet.add(node.getUniqueId()); // Track deletions properly
+                logger.debug("Deleted node: " + node.getUniqueId());
+                break;
+            }
+        }
     }
 
     public void printBuffer() {
         for (CrdtNode node : nodes) {
-            if (!node.isDeleted()){
-                System.out.println(node.getCharValue());
+            if (!node.isDeleted()) {
+                logger.debug("Node: " + node.getCharValue() + " | SiteId: " + node.getSiteId() + " | Clock: "
+                        + node.getClock() + " | Counter: " + node.getCounter());
             }
-        }  
+        }
     }
 
-    public static void main(String[] args) {
-        CrdtBuffer buffer = new CrdtBuffer("site1");
-        buffer.insert('H', "0");
-        buffer.insert('e', "1");
-        buffer.insert('l', "2");
-        buffer.insert('l', "3");
-        buffer.insert('o', "4");
-        
-
-        buffer.insert('m',"4");
-        buffer.printBuffer();
-        buffer.delete("site1",1);
-
-        buffer.printBuffer();
-        //System.out.println(buffer.getDocument()); // Should print "Hello"
+    public String getSiteId() {
+        return siteId;
     }
 }
 // test cases delete and insert
-// undo and redo 
+// undo and redo
