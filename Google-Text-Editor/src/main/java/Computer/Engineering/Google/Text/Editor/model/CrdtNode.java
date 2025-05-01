@@ -1,29 +1,24 @@
 package Computer.Engineering.Google.Text.Editor.model;
 
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 
-public class CrdtNode implements Comparable<CrdtNode> { 
-    private final String siteId;
-    private final int clock;
-    private final String parentId;
-    private final int counter;
-    private final char value;
+public class CrdtNode implements Comparable<CrdtNode> {
+    private String siteId;
+    private int clock;
+    private int counter;
+    private String parentId;
+    private char value;
     private boolean deleted;
 
+    public CrdtNode(String siteId, int clock, int counter, String parentId, char value) {
 
-    public CrdtNode(String siteId, int clock, int counter, String parentId ,char value) {
-        
         this.siteId = siteId;
         this.clock = clock;
         this.parentId = parentId;
         this.counter = counter;
         this.value = value;
         this.deleted = false;
-        
+
     }
 
     public String getUniqueId() {
@@ -34,38 +29,54 @@ public class CrdtNode implements Comparable<CrdtNode> {
         return deleted;
     }
 
-    public String getParentId(){
+    public String getParentId() {
         return parentId;
     }
 
     public void markDeleted() {
         this.deleted = true;
     }
-    public char getCharValue(){
+
+    public char getCharValue() {
         return value;
     }
 
-    public String getSiteId(){
+    public String getSiteId() {
         return siteId;
     }
-    public int getClock(){
+
+    public int getClock() {
         return clock;
     }
+
+    public int getCounter() {
+        return counter;
+    }
+
     @Override
     public int compareTo(CrdtNode other) {
-        if (this.parentId.equals(other.parentId)) {
-            if (this.counter != other.counter) {
-                return Integer.compare(other.counter, this.counter); // Descending order
-            }
-            return this.siteId.compareTo(other.siteId);
+        // First compare by clock (to ensure chronological order)
+        int clockCompare = Integer.compare(this.clock, other.clock);
+        if (clockCompare != 0) {
+            return clockCompare;
         }
-        return this.parentId.compareTo(other.parentId);
+
+        // Then compare by parentId
+        int parentCompare = this.parentId.compareTo(other.parentId);
+        if (parentCompare != 0) {
+            return parentCompare;
+        }
+
+        // Finally compare by counter (ascending order for same parent)
+        return Integer.compare(this.counter, other.counter);
     }
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (this == o)
+            return true;
+        if (o == null || getClass() != o.getClass())
+            return false;
         CrdtNode crdtNode = (CrdtNode) o;
         return clock == crdtNode.clock && siteId.equals(crdtNode.siteId);
     }
@@ -79,6 +90,4 @@ public class CrdtNode implements Comparable<CrdtNode> {
     public String toString() {
         return (deleted ? "⌫" : value) + "(" + getUniqueId() + ")";
     }
-
 }
-
