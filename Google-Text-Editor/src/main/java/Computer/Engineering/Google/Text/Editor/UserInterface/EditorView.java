@@ -3,13 +3,17 @@ package Computer.Engineering.Google.Text.Editor.UserInterface;
 import Computer.Engineering.Google.Text.Editor.model.CrdtBuffer;
 import Computer.Engineering.Google.Text.Editor.model.CrdtNode;
 import Computer.Engineering.Google.Text.Editor.model.SharedBuffer;
+import Computer.Engineering.Google.Text.Editor.model.SharedBuffer;
 import Computer.Engineering.Google.Text.Editor.sync.Broadcaster;
+import Computer.Engineering.Google.Text.Editor.services.UserRegistry;
 import Computer.Engineering.Google.Text.Editor.services.UserRegistry;
 
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.orderedlayout.*;
 import com.vaadin.flow.component.textfield.TextArea;
 import com.vaadin.flow.router.Route;
+import com.vaadin.flow.component.page.PendingJavaScriptResult;
+import com.vaadin.flow.component.html.Span;
 import com.vaadin.flow.component.page.PendingJavaScriptResult;
 import com.vaadin.flow.component.html.Span;
 import com.vaadin.flow.component.upload.receivers.MemoryBuffer;
@@ -20,6 +24,11 @@ import java.util.ArrayList;
 import java.util.List;
 import com.vaadin.flow.component.AttachEvent;
 import com.vaadin.flow.component.DetachEvent;
+
+import java.util.UUID;
+import java.util.Map;
+import java.util.HashMap;
+import com.vaadin.flow.server.VaadinSession;
 
 import java.util.UUID;
 import java.nio.charset.StandardCharsets;
