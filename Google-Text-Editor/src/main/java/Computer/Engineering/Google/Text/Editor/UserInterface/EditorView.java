@@ -4,7 +4,9 @@ import Computer.Engineering.Google.Text.Editor.model.CrdtBuffer;
 import Computer.Engineering.Google.Text.Editor.model.CrdtNode;
 import Computer.Engineering.Google.Text.Editor.model.SharedBuffer;
 import Computer.Engineering.Google.Text.Editor.model.SharedBuffer;
+import Computer.Engineering.Google.Text.Editor.model.SharedBuffer;
 import Computer.Engineering.Google.Text.Editor.sync.Broadcaster;
+import Computer.Engineering.Google.Text.Editor.services.UserRegistry;
 import Computer.Engineering.Google.Text.Editor.services.UserRegistry;
 import Computer.Engineering.Google.Text.Editor.services.UserRegistry;
 
@@ -19,6 +21,8 @@ import com.vaadin.flow.component.html.Span;
 import com.vaadin.flow.component.upload.receivers.MemoryBuffer;
 import com.vaadin.flow.component.upload.Upload;
 import com.vaadin.flow.component.html.Anchor;
+import com.vaadin.flow.component.page.PendingJavaScriptResult;
+import com.vaadin.flow.component.html.Span;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -38,6 +42,11 @@ import java.util.HashMap;
 import java.io.ByteArrayInputStream;
 import com.vaadin.flow.server.VaadinSession;
 import com.vaadin.flow.server.StreamResource;
+
+import java.util.UUID;
+import java.util.Map;
+import java.util.HashMap;
+import com.vaadin.flow.server.VaadinSession;
 
 @Route("")
 public class EditorView extends VerticalLayout implements Broadcaster.BroadcastListener {

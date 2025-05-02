@@ -10,6 +10,10 @@ import Computer.Engineering.Google.Text.Editor.services.UserRegistry; // Replace
 import com.vaadin.flow.server.VaadinService;
 
 import Computer.Engineering.Google.Text.Editor.services.UserRegistry; // Replace with the actual package of UserRegistry
+import com.vaadin.flow.server.VaadinSession;
+import com.vaadin.flow.server.VaadinService;
+
+import Computer.Engineering.Google.Text.Editor.services.UserRegistry; // Replace with the actual package of UserRegistry
 
 @Push
 public class AppShell implements AppShellConfigurator {
