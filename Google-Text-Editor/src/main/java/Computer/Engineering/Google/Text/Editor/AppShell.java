@@ -3,17 +3,9 @@ package Computer.Engineering.Google.Text.Editor;
 
 import com.vaadin.flow.component.page.AppShellConfigurator;
 import com.vaadin.flow.component.page.Push;
-import com.vaadin.flow.server.VaadinSession;
 import com.vaadin.flow.server.VaadinService;
 
-import Computer.Engineering.Google.Text.Editor.services.UserRegistry; // Replace with the actual package of UserRegistry
-import com.vaadin.flow.server.VaadinService;
-
-import Computer.Engineering.Google.Text.Editor.services.UserRegistry; // Replace with the actual package of UserRegistry
-import com.vaadin.flow.server.VaadinSession;
-import com.vaadin.flow.server.VaadinService;
-
-import Computer.Engineering.Google.Text.Editor.services.UserRegistry; // Replace with the actual package of UserRegistry
+import Computer.Engineering.Google.Text.Editor.services.UserRegistry; // Replace with the actual package of UserRegistry// Replace with the actual package of UserRegistry
 
 @Push
 public class AppShell implements AppShellConfigurator {

@@ -3,11 +3,7 @@ package Computer.Engineering.Google.Text.Editor.UserInterface;
 import Computer.Engineering.Google.Text.Editor.model.CrdtBuffer;
 import Computer.Engineering.Google.Text.Editor.model.CrdtNode;
 import Computer.Engineering.Google.Text.Editor.model.SharedBuffer;
-import Computer.Engineering.Google.Text.Editor.model.SharedBuffer;
-import Computer.Engineering.Google.Text.Editor.model.SharedBuffer;
 import Computer.Engineering.Google.Text.Editor.sync.Broadcaster;
-import Computer.Engineering.Google.Text.Editor.services.UserRegistry;
-import Computer.Engineering.Google.Text.Editor.services.UserRegistry;
 import Computer.Engineering.Google.Text.Editor.services.UserRegistry;
 
 import com.vaadin.flow.component.button.Button;
@@ -16,13 +12,9 @@ import com.vaadin.flow.component.textfield.TextArea;
 import com.vaadin.flow.router.Route;
 import com.vaadin.flow.component.page.PendingJavaScriptResult;
 import com.vaadin.flow.component.html.Span;
-import com.vaadin.flow.component.page.PendingJavaScriptResult;
-import com.vaadin.flow.component.html.Span;
 import com.vaadin.flow.component.upload.receivers.MemoryBuffer;
 import com.vaadin.flow.component.upload.Upload;
 import com.vaadin.flow.component.html.Anchor;
-import com.vaadin.flow.component.page.PendingJavaScriptResult;
-import com.vaadin.flow.component.html.Span;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -34,19 +26,11 @@ import java.util.Map;
 import java.util.HashMap;
 import com.vaadin.flow.server.VaadinSession;
 
-import java.util.UUID;
 import java.nio.charset.StandardCharsets;
 import java.io.IOException;
-import java.util.Map;
-import java.util.HashMap;
 import java.io.ByteArrayInputStream;
-import com.vaadin.flow.server.VaadinSession;
-import com.vaadin.flow.server.StreamResource;
 
-import java.util.UUID;
-import java.util.Map;
-import java.util.HashMap;
-import com.vaadin.flow.server.VaadinSession;
+import com.vaadin.flow.server.StreamResource;
 
 @Route("")
 public class EditorView extends VerticalLayout implements Broadcaster.BroadcastListener {
@@ -75,7 +59,21 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
         importUpload.addSucceededListener(event -> {
             try {
                 String content = new String(buffer.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-                editor.setValue(content); // this will trigger CRDT sync through valueChangeListener
+                // Clear the CRDT buffer before importing new content
+                crdtBuffer.clear();
+                // Insert each character into the CRDT buffer
+                String parentId = "0";
+                for (char c : content.toCharArray()) {
+                    crdtBuffer.insert(c, parentId);
+                    parentId = crdtBuffer.getNodeIdAtPosition(crdtBuffer.getDocument().length() - 1);
+                }
+                // Update the editor value (this will trigger valueChangeListener, but you can
+                // skip broadcasting there)
+                editor.setValue(content);
+                // Broadcast the new buffer state to all users
+                Broadcaster.broadcast(
+                        new ArrayList<>(crdtBuffer.getAllNodes()),
+                        new ArrayList<>(crdtBuffer.getDeletedNodes()));
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -100,7 +98,7 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             // Get the document content
             String content = editor.getValue();
 
-            StreamResource resource = new StreamResource("document.txt", 
+            StreamResource resource = new StreamResource("document.txt",
                     () -> new ByteArrayInputStream(content.getBytes(StandardCharsets.UTF_8)));
             resource.setContentType("text/plain");
 
