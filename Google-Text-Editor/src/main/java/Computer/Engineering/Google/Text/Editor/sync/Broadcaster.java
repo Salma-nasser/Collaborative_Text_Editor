@@ -4,12 +4,13 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import Computer.Engineering.Google.Text.Editor.model.CrdtNode; // Adjust the package path as needed
 
-
 public class Broadcaster {
     static final List<BroadcastListener> listeners = new CopyOnWriteArrayList<>();
 
     public interface BroadcastListener {
         void receiveBroadcast(List<CrdtNode> nodes, List<CrdtNode> deletedNodes);
+
+        void receiveCursor(String userId, int cursorPos, String color);
     }
 
     public static synchronized void broadcast(List<CrdtNode> nodes, List<CrdtNode> deletedNodes) {
@@ -25,5 +26,10 @@ public class Broadcaster {
     public static synchronized void unregister(BroadcastListener listener) {
         listeners.remove(listener);
     }
-}
 
+    public static void broadcastCursor(String userId, int cursorPos, String color) {
+        for (BroadcastListener listener : listeners) {
+            listener.receiveCursor(userId, cursorPos, color);
+        }
+    }
+}
