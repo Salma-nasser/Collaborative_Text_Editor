@@ -1,9 +1,7 @@
 package Computer.Engineering.Google.Text.Editor.UserInterface;
-
 import Computer.Engineering.Google.Text.Editor.model.CrdtBuffer;
 import Computer.Engineering.Google.Text.Editor.model.CrdtNode;
 import Computer.Engineering.Google.Text.Editor.sync.Broadcaster;
-
 //import com.vaadin.flow.component.Text;
 import com.vaadin.flow.component.button.Button;
 //import com.vaadin.flow.component.html.Div;
@@ -11,11 +9,18 @@ import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.orderedlayout.*;
 import com.vaadin.flow.component.textfield.TextArea;
 import com.vaadin.flow.router.Route;
-
 import java.util.ArrayList;
 import java.util.List;
 import com.vaadin.flow.component.AttachEvent;
 import com.vaadin.flow.component.DetachEvent;
+import com.vaadin.flow.component.upload.Upload;
+import com.vaadin.flow.component.upload.receivers.MemoryBuffer;
+import com.vaadin.flow.component.html.Anchor;
+import com.vaadin.flow.server.StreamResource;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+
 
 @Route("")
 public class EditorView extends VerticalLayout implements Broadcaster.BroadcastListener {
@@ -30,12 +35,44 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
         // Top Toolbar Buttons (Optional for future features like undo/redo)
         Button undoButton = new Button("Undo"); // Not yet wired
         Button redoButton = new Button("Redo");
-        Button importButton = new Button("Import");
-        Button exportButton = new Button("Export");
+        // Button importButton = new Button("Import");
+        // 
+        // Import: Upload a .txt file
+        MemoryBuffer buffer = new MemoryBuffer();
+        Upload importUpload = new Upload(buffer);
+        importUpload.setAcceptedFileTypes(".txt");
+        importUpload.addSucceededListener(event -> {
+            try {
+                String content = new String(buffer.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                editor.setValue(content); // this will trigger CRDT sync through valueChangeListener
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        });
+        importUpload.setUploadButton(new Button("Import"));
+        importUpload.setDropAllowed(false);
 
+        // Export: Download current text
+        //Button exportButton = new Button("Export");
+        Anchor exportAnchor = new Anchor();
+        Button exportButton = new Button("Export");
+        
+        // The Anchor element's href will be set dynamically when the export button is clicked
+        exportButton.addClickListener(e -> {
+            String content = editor.getValue();
+            StreamResource resource = new StreamResource("document.txt", () ->
+                new ByteArrayInputStream(content.getBytes(StandardCharsets.UTF_8)));
+            exportAnchor.setHref(resource);
+            exportAnchor.getElement().setAttribute("download", "document.txt"); // Set the download filename
+            exportAnchor.getElement().callJsFunction("click"); // Simulate click on the Anchor to start the download
+        });
+        
+        // Set visibility of the export anchor as needed (it doesn't need to be visible in the layout)
+        exportAnchor.setVisible(false);
+        
         HorizontalLayout topBanner = new HorizontalLayout(
                 new HorizontalLayout(undoButton, redoButton),
-                new HorizontalLayout(importButton, exportButton));
+                new HorizontalLayout(importUpload, exportButton));
         topBanner.setWidthFull();
         topBanner.setJustifyContentMode(FlexComponent.JustifyContentMode.BETWEEN);
         topBanner.setAlignItems(FlexComponent.Alignment.CENTER);
@@ -102,6 +139,7 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
         setSpacing(false);
         setMargin(false);
         add(topBanner, mainArea);
+        //add(exportAnchor);
         expand(mainArea);
     }
 
