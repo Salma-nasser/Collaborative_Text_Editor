@@ -37,6 +37,10 @@ public class CrdtNode implements Comparable<CrdtNode> {
         this.deleted = true;
     }
 
+    public void markNotDeleted() {
+        this.deleted = false;
+    }
+
     public char getCharValue() {
         return value;
     }

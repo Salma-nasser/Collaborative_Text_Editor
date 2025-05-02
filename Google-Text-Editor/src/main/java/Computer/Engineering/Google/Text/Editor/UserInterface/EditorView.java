@@ -44,12 +44,15 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
     private final String userId = UUID.randomUUID().toString();
     private final String userColor = UserRegistry.getInstance().registerUser(userId);
     private final Map<String, Integer> userCursors = new HashMap<>();
+    private final Button undoButton = new Button("Undo");
+    private final Button redoButton = new Button("Redo");
 
     public EditorView() {
         VaadinSession.getCurrent().setAttribute("userId", userId);
         // Top Toolbar Buttons (Optional for future features like undo/redo)
-        Button undoButton = new Button("Undo"); // Not yet wired
-        Button redoButton = new Button("Redo");
+        //Button undoButton = new Button("Undo"); // Not yet wired
+        //Button redoButton = new Button("Redo");
+        setupUndoRedo();
         // Button importButton = new Button("Import");
         //
         // Import: Upload a .txt file
@@ -296,5 +299,48 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
         userCursors.remove(userId);
         Broadcaster.broadcastCursor(userId, -1, userColor); // -1 means "gone"
         updateUserPanel();
+    }
+    private void setupUndoRedo() {
+        undoButton.addClickListener(e -> {
+            SharedBuffer.getInstance().undo();
+            SharedBuffer.getInstance().printStacks();
+            SharedBuffer.getInstance().printOperationSequence();
+            editor.setValue(SharedBuffer.getInstance().getDocument());
+            Broadcaster.broadcast(
+                    new ArrayList<>(SharedBuffer.getInstance().getAllNodes()),
+                    new ArrayList<>(SharedBuffer.getInstance().getDeletedNodes())
+            );
+        });
+
+
+        redoButton.addClickListener(e -> {
+            getUI().ifPresent(ui -> ui.access(() -> {
+                // 1. Execute redo operation
+                if (SharedBuffer.getInstance().redo()) {
+                    // 2. Get fresh document state
+                    String currentDoc = SharedBuffer.getInstance().getDocument();
+
+                    // 3. Update editor while suppressing the value change listener
+                    editor.getStyle().set("pointer-events", "none"); // Temporary lock
+                    boolean oldReadOnly = editor.isReadOnly();
+                    editor.setReadOnly(true);
+
+                    editor.setValue(currentDoc);
+
+                    // 4. Restore editor state
+                    editor.setReadOnly(oldReadOnly);
+                    editor.getStyle().set("pointer-events", "auto");
+
+                    // 5. Force UI refresh
+                    editor.getElement().executeJs("this.dispatchEvent(new Event('input'))");
+
+                    // 6. Broadcast changes
+                    Broadcaster.broadcast(
+                            new ArrayList<>(SharedBuffer.getInstance().getAllNodes()),
+                            new ArrayList<>(SharedBuffer.getInstance().getDeletedNodes())
+                    );
+                }
+            }));
+        });
     }
 }
