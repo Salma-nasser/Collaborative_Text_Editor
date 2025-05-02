@@ -139,6 +139,31 @@ public class CrdtBuffer {
     public String getSiteId() {
         return siteId;
     }
+
+    /**
+     * Clears all content from the buffer
+     */
+    public void clear() {
+        this.nodes.clear();
+        this.deletedSet.clear();
+        this.clock = 0;
+    }
+
+    /**
+     * Returns the ID of the last inserted node, or "0" if no nodes exist
+     * @return The ID string of the last inserted node
+     */
+    public String getLastInsertedId() {
+        if (nodes.isEmpty()) {
+            return "0"; // Default for empty buffer
+        }
+        List<CrdtNode> sortedNodes = new ArrayList<>(nodes);
+        Collections.sort(sortedNodes);
+    
+        CrdtNode lastNode = sortedNodes.get(sortedNodes.size() - 1);
+        return lastNode.getSiteId() + "-" + lastNode.getClock();
+    }
 }
+
 // test cases delete and insert
 // undo and redo
