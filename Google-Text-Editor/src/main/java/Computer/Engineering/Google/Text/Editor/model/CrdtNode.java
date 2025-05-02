@@ -55,20 +55,26 @@ public class CrdtNode implements Comparable<CrdtNode> {
 
     @Override
     public int compareTo(CrdtNode other) {
-        // First compare by clock (to ensure chronological order)
-        int clockCompare = Integer.compare(this.clock, other.clock);
-        if (clockCompare != 0) {
-            return clockCompare;
-        }
-
-        // Then compare by parentId
+        // First compare by parentId (group siblings)
         int parentCompare = this.parentId.compareTo(other.parentId);
         if (parentCompare != 0) {
             return parentCompare;
         }
 
-        // Finally compare by counter (ascending order for same parent)
-        return Integer.compare(this.counter, other.counter);
+        // Then compare by counter (sequence number), descending (higher first)
+        int counterCompare = Integer.compare(other.counter, this.counter);
+        if (counterCompare != 0) {
+            return counterCompare;
+        }
+
+        // Then compare by siteId (to break ties deterministically)
+        int siteCompare = this.siteId.compareTo(other.siteId);
+        if (siteCompare != 0) {
+            return siteCompare;
+        }
+
+        // Finally, compare by clock (as a last resort)
+        return Integer.compare(this.clock, other.clock);
     }
 
     @Override
