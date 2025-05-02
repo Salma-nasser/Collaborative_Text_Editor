@@ -58,13 +58,30 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
         Button exportButton = new Button("Export");
         
         // The Anchor element's href will be set dynamically when the export button is clicked
+        //Anchor exportAnchor = new Anchor();
+        exportAnchor.getElement().setAttribute("download", true); // Ensure it downloads as a .txt file
+        //exportAnchor.setVisible(false); // Hide it initially
+        add(exportAnchor); // Add it to the layout
+        
+        // Configure the export button
         exportButton.addClickListener(e -> {
+            // Get the document content
             String content = editor.getValue();
+        
+            // Create a StreamResource from the content
             StreamResource resource = new StreamResource("document.txt", () ->
-                new ByteArrayInputStream(content.getBytes(StandardCharsets.UTF_8)));
+                new ByteArrayInputStream(content.getBytes(StandardCharsets.UTF_8))
+            );
+        
+            // Update the exportAnchor with the new resource
             exportAnchor.setHref(resource);
-            exportAnchor.getElement().setAttribute("download", "document.txt"); // Set the download filename
-            exportAnchor.getElement().callJsFunction("click"); // Simulate click on the Anchor to start the download
+            exportAnchor.setVisible(true); // Make it visible temporarily
+        
+            // Trigger the download
+            exportAnchor.getElement().callJsFunction("click");
+        
+            // Hide the exportAnchor again after the click
+           // exportAnchor.setVisible(false);
         });
         
         // Set visibility of the export anchor as needed (it doesn't need to be visible in the layout)
