@@ -28,12 +28,20 @@ import com.vaadin.flow.component.upload.receivers.MemoryBuffer;
 import com.vaadin.flow.router.Route;
 import com.vaadin.flow.server.StreamResource;
 import com.vaadin.flow.server.VaadinSession;
+import com.vaadin.flow.component.ClientCallable;
 
 import Computer.Engineering.Google.Text.Editor.model.CrdtBuffer;
 import Computer.Engineering.Google.Text.Editor.model.CrdtNode;
 import Computer.Engineering.Google.Text.Editor.model.SharedBuffer;
 import Computer.Engineering.Google.Text.Editor.services.UserRegistry;
 import Computer.Engineering.Google.Text.Editor.sync.Broadcaster;
+
+import java.nio.charset.StandardCharsets;
+import java.io.IOException;
+import java.io.ByteArrayInputStream;
+
+
+
 
 @Route("")
 public class EditorView extends VerticalLayout implements Broadcaster.BroadcastListener {
@@ -188,16 +196,115 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             for (char c : content.toCharArray()) {
                 getCrdtBuffer().insert(c, parentId);
                 parentId = getCrdtBuffer().getNodeIdAtPosition(getCrdtBuffer().getDocument().length() - 1);
+              
+        // Editor Setup: TextArea with CRDT logic for typing
+        editor = new TextArea();
+        editor.setWidthFull();
+        editor.setHeightFull();
+        editor.getStyle().set("resize", "none");
+        editor.setReadOnly(false); // Allow text editing
+
+        // Add JS listener to update cursor position
+        editor.getElement().addEventListener("input", e -> {
+            PendingJavaScriptResult js = editor.getElement().executeJs(
+                    "return this.inputElement.selectionStart;");
+            js.then(Integer.class, pos -> {
+                cursorPosition = pos;
+                Broadcaster.broadcastCursor(userId, cursorPosition, userColor);
+            });
+        });
+
+        // Add comprehensive cursor tracking events
+        editor.getElement().executeJs("""
+                    this.addEventListener('click', function() {
+                        console.log('Cursor click: ' + this.inputElement.selectionStart);
+                        this.$server.handleCursorPosition(this.inputElement.selectionStart);
+                    });
+                    this.addEventListener('keyup', function(e) {
+                        if (e.key.startsWith('Arrow') || e.key == 'Home' || e.key == 'End') {
+                            console.log('Cursor keyup: ' + this.inputElement.selectionStart);
+                            this.$server.handleCursorPosition(this.inputElement.selectionStart);
+                        }
+                    });
+                    this.addEventListener('focus', function() {
+                        console.log('Cursor focus: ' + this.inputElement.selectionStart);
+                        this.$server.handleCursorPosition(this.inputElement.selectionStart);
+                    });
+                """);
+
+        editor.addValueChangeListener(event -> {
+            if (!event.isFromClient())
+                return;
+
+            String newText = event.getValue();
+            String oldText = crdtBuffer.getDocument();
+
+            System.out.println("Value change event - cursor at: " + cursorPosition);
+            System.out.println("Old text: '" + oldText + "'");
+            System.out.println("New text: '" + newText + "'");
+
+            int oldLen = oldText.length();
+            int newLen = newText.length();
+
+            int start = 0;
+            while (start < Math.min(oldLen, newLen) && oldText.charAt(start) == newText.charAt(start)) {
+                start++;
+            }
+
+            int endOld = oldLen - 1;
+            int endNew = newLen - 1;
+            while (endOld >= start && endNew >= start && oldText.charAt(endOld) == newText.charAt(endNew)) {
+                endOld--;
+                endNew--;
+            }
+
+            System.out.println("Diffing results - start: " + start + ", endOld: " + endOld + ", endNew: " + endNew);
+
+            // Handle deletions
+            for (int i = start; i <= endOld; i++) {
+                String nodeIdToDelete = crdtBuffer.getNodeIdAtPosition(start); // always delete at logical position
+                if (!nodeIdToDelete.equals("0")) {
+                    String[] parts = nodeIdToDelete.split("-");
+                    crdtBuffer.delete(parts[0], Integer.parseInt(parts[1]));
+                }
+            }
+
+            // If there are insertions
+            if (start <= endNew) {
+                // This is the key fix - use cursor position to determine insertion point
+                int insertionPoint = start; // The diffing position is your actual insertion point
+                System.out.println("Insertion point: " + insertionPoint);
+
+                // Get the node ID exactly at insertionPoint - 1 (character before cursor)
+                String parentId = (insertionPoint == 0) ? "0" : crdtBuffer.getNodeIdAtPosition(insertionPoint - 1);
+                System.out.println("Using parent ID: " + parentId + " for insertion at position " + insertionPoint);
+
+                // Insert characters one by one, with the first character having the parent ID
+                // determined above
+                for (int i = start; i <= endNew; i++) {
+                    char c = newText.charAt(i);
+                    String newNodeId = crdtBuffer.insertAndReturnId(c, parentId);
+                    // Important: use the newly inserted node as parent for the next insertion
+                    parentId = newNodeId;
+                    System.out.println("Inserted '" + c + "' with parent: " + parentId);
+                }
             }
             editor.setValue(content);
             Broadcaster.broadcast(
                 new ArrayList<>(getCrdtBuffer().getAllNodes()),
                 new ArrayList<>(getCrdtBuffer().getDeletedNodes()),
                 sessionCode  );
+            // Debug: print the resulting document and CRDT tree
+            System.out.println("Final document: '" + crdtBuffer.getDocument() + "'");
+            crdtBuffer.printBuffer();
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
+
+
+        });
+
 
     private void handleFileExport(Anchor exportAnchor) {
         String content = editor.getValue();
@@ -447,5 +554,24 @@ protected void onDetach(DetachEvent detachEvent) {
     Broadcaster.broadcastCursor(userId, -1, userColor, sessionCode);
     Broadcaster.broadcastPresence(userId, userRole, false, sessionCode);
     updateUserPanel();
+    // Add ClientCallable method to receive cursor position updates
+    @ClientCallable
+    private void handleCursorPosition(int position) {
+        System.out.println("Cursor position updated: " + position +
+                " (current document length: " + crdtBuffer.getDocument().length() + ")");
+
+        // Log what character is before cursor
+        if (position > 0) {
+            String doc = crdtBuffer.getDocument();
+            String nodeId = crdtBuffer.getNodeIdAtPosition(position - 1);
+            System.out.println("Character before cursor: '" +
+                    doc.charAt(position - 1) + "' with ID: " + nodeId);
+        }
+
+        cursorPosition = position;
+        userCursors.put(userId, position);
+        Broadcaster.broadcastCursor(userId, cursorPosition, userColor);
+    }
+
 }
 }
