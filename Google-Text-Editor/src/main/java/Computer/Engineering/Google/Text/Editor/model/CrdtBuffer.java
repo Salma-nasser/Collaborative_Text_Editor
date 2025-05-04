@@ -82,30 +82,81 @@ public class CrdtBuffer {
 
     public String getDocument() {
         StringBuilder doc = new StringBuilder();
+        Map<String, List<CrdtNode>> childrenMap = new HashMap<>();
 
-        nodes.sort(Comparator.comparingInt(CrdtNode::getClock)); // Ensures correct order
-
+        // Group nodes by parentId
         for (CrdtNode node : nodes) {
             if (!node.isDeleted()) {
-                doc.append(node.getCharValue());
+                childrenMap.computeIfAbsent(node.getParentId(), k -> new ArrayList<>()).add(node);
             }
         }
+
+        System.out.println("\n===== DOCUMENT TREE STRUCTURE =====");
+        System.out.println("Root node: 0");
+        // Recursively append children in CRDT order
+        buildDocument("0", childrenMap, doc, "", 0);
+        System.out.println("==================================\n");
 
         return doc.toString();
     }
 
+    private void buildDocument(String parentId, Map<String, List<CrdtNode>> childrenMap,
+            StringBuilder doc, String indent, int depth) {
+        List<CrdtNode> children = childrenMap.get(parentId);
+        if (children == null)
+            return;
+
+        // Sort using your CRDT's compareTo
+        children.sort(CrdtNode::compareTo);
+
+        for (CrdtNode node : children) {
+            // Print node info with tree visualization
+            String nodeInfo = String.format("%s├─ '%c' (ID: %s, Parent: %s, Counter: %d, Depth: %d)",
+                    indent, node.getCharValue(), node.getUniqueId(),
+                    parentId, node.getCounter(), depth);
+            System.out.println(nodeInfo);
+
+            doc.append(node.getCharValue());
+
+            // Recursively process children
+            buildDocument(node.getUniqueId(), childrenMap, doc, indent + "│  ", depth + 1);
+        }
+    }
+
     // Helper method to find a node's ID by its position
     public String getNodeIdAtPosition(int position) {
-        int currentPos = 0;
+        // Build tree structure like getDocument() does
+        Map<String, List<CrdtNode>> childrenMap = new HashMap<>();
         for (CrdtNode node : nodes) {
             if (!node.isDeleted()) {
-                if (currentPos == position) {
-                    return node.getUniqueId();
-                }
-                currentPos++;
+                childrenMap.computeIfAbsent(node.getParentId(), k -> new ArrayList<>()).add(node);
             }
         }
-        return "0"; // Default to beginning
+
+        List<String> nodeIds = new ArrayList<>();
+        buildNodeIdList("0", childrenMap, nodeIds);
+
+        // Now get node at the requested position
+        if (position < 0 || position >= nodeIds.size()) {
+            return "0"; // Default to root if out of bounds
+        }
+
+        return nodeIds.get(position);
+    }
+
+    private void buildNodeIdList(String parentId, Map<String, List<CrdtNode>> childrenMap, List<String> result) {
+        List<CrdtNode> children = childrenMap.get(parentId);
+        if (children == null)
+            return;
+
+        // Sort using the same ordering as document building
+        children.sort(CrdtNode::compareTo);
+
+        for (CrdtNode node : children) {
+            result.add(node.getUniqueId());
+            // Recursively add children's IDs
+            buildNodeIdList(node.getUniqueId(), childrenMap, result);
+        }
     }
 
     public List<CrdtNode> getAllNodes() {
@@ -151,6 +202,7 @@ public class CrdtBuffer {
 
     /**
      * Returns the ID of the last inserted node, or "0" if no nodes exist
+     * 
      * @return The ID string of the last inserted node
      */
     public String getLastInsertedId() {
@@ -159,9 +211,28 @@ public class CrdtBuffer {
         }
         List<CrdtNode> sortedNodes = new ArrayList<>(nodes);
         Collections.sort(sortedNodes);
-    
+
         CrdtNode lastNode = sortedNodes.get(sortedNodes.size() - 1);
         return lastNode.getSiteId() + "-" + lastNode.getClock();
+    }
+
+    public String insertAndReturnId(char charValue, String parentId) {
+        clock++;
+        int counter = 0;
+        Set<Integer> existingCounters = new HashSet<>();
+        for (CrdtNode node : nodes) {
+            if (node.getParentId().equals(parentId)) {
+                existingCounters.add(node.getCounter());
+            }
+        }
+        while (existingCounters.contains(counter)) {
+            counter++;
+        }
+        CrdtNode newNode = new CrdtNode(siteId, clock, counter, parentId, charValue);
+        nodes.add(newNode);
+        Collections.sort(nodes);
+        logger.debug("Inserted node: " + newNode);
+        return newNode.getUniqueId();
     }
 }
 

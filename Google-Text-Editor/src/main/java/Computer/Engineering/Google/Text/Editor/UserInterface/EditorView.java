@@ -31,6 +31,7 @@ import java.io.IOException;
 import java.io.ByteArrayInputStream;
 
 import com.vaadin.flow.server.StreamResource;
+import com.vaadin.flow.component.ClientCallable;
 
 @Route("")
 public class EditorView extends VerticalLayout implements Broadcaster.BroadcastListener {
@@ -142,12 +143,34 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             });
         });
 
+        // Add comprehensive cursor tracking events
+        editor.getElement().executeJs("""
+                    this.addEventListener('click', function() {
+                        console.log('Cursor click: ' + this.inputElement.selectionStart);
+                        this.$server.handleCursorPosition(this.inputElement.selectionStart);
+                    });
+                    this.addEventListener('keyup', function(e) {
+                        if (e.key.startsWith('Arrow') || e.key == 'Home' || e.key == 'End') {
+                            console.log('Cursor keyup: ' + this.inputElement.selectionStart);
+                            this.$server.handleCursorPosition(this.inputElement.selectionStart);
+                        }
+                    });
+                    this.addEventListener('focus', function() {
+                        console.log('Cursor focus: ' + this.inputElement.selectionStart);
+                        this.$server.handleCursorPosition(this.inputElement.selectionStart);
+                    });
+                """);
+
         editor.addValueChangeListener(event -> {
             if (!event.isFromClient())
                 return;
 
             String newText = event.getValue();
             String oldText = crdtBuffer.getDocument();
+
+            System.out.println("Value change event - cursor at: " + cursorPosition);
+            System.out.println("Old text: '" + oldText + "'");
+            System.out.println("New text: '" + newText + "'");
 
             int oldLen = oldText.length();
             int newLen = newText.length();
@@ -164,6 +187,8 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                 endNew--;
             }
 
+            System.out.println("Diffing results - start: " + start + ", endOld: " + endOld + ", endNew: " + endNew);
+
             // Handle deletions
             for (int i = start; i <= endOld; i++) {
                 String nodeIdToDelete = crdtBuffer.getNodeIdAtPosition(start); // always delete at logical position
@@ -173,30 +198,34 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                 }
             }
 
-            // Calculate number of inserted characters
-            int numInserted = endNew - start + 1;
+            // If there are insertions
+            if (start <= endNew) {
+                // This is the key fix - use cursor position to determine insertion point
+                int insertionPoint = start; // The diffing position is your actual insertion point
+                System.out.println("Insertion point: " + insertionPoint);
 
-            // The logical position where the first new character should be inserted is the
-            // cursor position minus the number of new characters just inserted
-            int insertPos = cursorPosition - numInserted;
+                // Get the node ID exactly at insertionPoint - 1 (character before cursor)
+                String parentId = (insertionPoint == 0) ? "0" : crdtBuffer.getNodeIdAtPosition(insertionPoint - 1);
+                System.out.println("Using parent ID: " + parentId + " for insertion at position " + insertionPoint);
 
-            // Defensive: if user pasted at the end, insertPos could be < 0
-            if (insertPos < 0)
-                insertPos = 0;
-
-            // Insert at the correct logical position
-            String parentId = crdtBuffer.getNodeIdAtPosition(insertPos - 1);
-            for (int i = start; i <= endNew; i++) {
-                char c = newText.charAt(i);
-                crdtBuffer.insert(c, parentId == null ? "0" : parentId);
-                // After inserting, the new node is now the parent for the next insert
-                insertPos++;
-                parentId = crdtBuffer.getNodeIdAtPosition(insertPos - 1);
+                // Insert characters one by one, with the first character having the parent ID
+                // determined above
+                for (int i = start; i <= endNew; i++) {
+                    char c = newText.charAt(i);
+                    String newNodeId = crdtBuffer.insertAndReturnId(c, parentId);
+                    // Important: use the newly inserted node as parent for the next insertion
+                    parentId = newNodeId;
+                    System.out.println("Inserted '" + c + "' with parent: " + parentId);
+                }
             }
 
             Broadcaster.broadcast(
                     new ArrayList<>(crdtBuffer.getAllNodes()),
                     new ArrayList<>(crdtBuffer.getDeletedNodes()));
+
+            // Debug: print the resulting document and CRDT tree
+            System.out.println("Final document: '" + crdtBuffer.getDocument() + "'");
+            crdtBuffer.printBuffer();
         });
 
         // userColor is already initialized during declaration
@@ -296,5 +325,24 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
         userCursors.remove(userId);
         Broadcaster.broadcastCursor(userId, -1, userColor); // -1 means "gone"
         updateUserPanel();
+    }
+
+    // Add ClientCallable method to receive cursor position updates
+    @ClientCallable
+    private void handleCursorPosition(int position) {
+        System.out.println("Cursor position updated: " + position +
+                " (current document length: " + crdtBuffer.getDocument().length() + ")");
+
+        // Log what character is before cursor
+        if (position > 0) {
+            String doc = crdtBuffer.getDocument();
+            String nodeId = crdtBuffer.getNodeIdAtPosition(position - 1);
+            System.out.println("Character before cursor: '" +
+                    doc.charAt(position - 1) + "' with ID: " + nodeId);
+        }
+
+        cursorPosition = position;
+        userCursors.put(userId, position);
+        Broadcaster.broadcastCursor(userId, cursorPosition, userColor);
     }
 }
