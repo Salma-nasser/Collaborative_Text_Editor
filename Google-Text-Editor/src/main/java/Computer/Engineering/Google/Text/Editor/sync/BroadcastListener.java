@@ -1,10 +1,24 @@
 package Computer.Engineering.Google.Text.Editor.sync;
 
-import Computer.Engineering.Google.Text.Editor.model.CrdtNode;
 import java.util.List;
 
-public interface BroadcastListener {
-  void receiveBroadcast(List<CrdtNode> nodes, List<CrdtNode> deleted);
+import Computer.Engineering.Google.Text.Editor.model.CrdtNode;
 
-  void receiveCursor(String userId, int cursorPos, String color);
+public interface BroadcastListener {
+    // Document synchronization
+    void receiveBroadcast(List<CrdtNode> nodes, List<CrdtNode> deletedNodes);
+    
+    // Cursor tracking
+    void receiveCursor(String userId, int cursorPos, String color);
+    
+    // User presence
+    void receiveUserPresence(String userId, String role, boolean isOnline, String sessionCode);
+    
+    // Document state transfer
+    void receiveDocumentRequest(String requesterId, String sessionCode);
+    void receiveDocumentState(String documentContent);
+    
+    // Required getters
+    String getSessionCode();
+    String getUserId();
 }
