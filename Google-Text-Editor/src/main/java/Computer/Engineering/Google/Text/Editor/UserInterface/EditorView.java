@@ -13,8 +13,12 @@ import com.vaadin.flow.router.Route;
 import com.vaadin.flow.component.page.PendingJavaScriptResult;
 import com.vaadin.flow.component.html.Span;
 import com.vaadin.flow.component.upload.receivers.MemoryBuffer;
+import com.vaadin.flow.component.textfield.TextField;
 import com.vaadin.flow.component.upload.Upload;
 import com.vaadin.flow.component.html.Anchor;
+import com.vaadin.flow.component.html.H3;
+import com.vaadin.flow.component.html.H4;
+import com.vaadin.flow.component.html.Hr;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -43,8 +47,19 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
     private final VerticalLayout userPanel = new VerticalLayout();
     private final UserRegistry userRegistry = UserRegistry.getInstance();
     private final String userId = UUID.randomUUID().toString();
-    private final String userColor = UserRegistry.getInstance().registerUser(userId);
+    private final String userColor = UserRegistry.getInstance().registerUser(userId, "", "editor"); // Initialize with
     private final Map<String, Integer> userCursors = new HashMap<>();
+    private String sessionCode = "";
+    private TextField sessionCodeField;
+    private Button joinSessionButton;
+    private String userRole = "editor";
+    private final Map<String, String> userRoles = new HashMap<>();
+
+    private CrdtBuffer getCrdtBuffer() {
+        return sessionCode.isEmpty()
+                ? new CrdtBuffer("temp")
+                : SharedBuffer.getInstance(sessionCode);
+    }
 
     public EditorView() {
         VaadinSession.getCurrent().setAttribute("userId", userId);
@@ -74,7 +89,7 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                 // Broadcast the new buffer state to all users
                 Broadcaster.broadcast(
                         new ArrayList<>(crdtBuffer.getAllNodes()),
-                        new ArrayList<>(crdtBuffer.getDeletedNodes()));
+                        new ArrayList<>(crdtBuffer.getDeletedNodes()), sessionCode);
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -139,7 +154,7 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                     "return this.inputElement.selectionStart;");
             js.then(Integer.class, pos -> {
                 cursorPosition = pos;
-                Broadcaster.broadcastCursor(userId, cursorPosition, userColor);
+                Broadcaster.broadcastCursor(userId, cursorPosition, userColor, sessionCode);
             });
         });
 
@@ -221,7 +236,7 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
 
             Broadcaster.broadcast(
                     new ArrayList<>(crdtBuffer.getAllNodes()),
-                    new ArrayList<>(crdtBuffer.getDeletedNodes()));
+                    new ArrayList<>(crdtBuffer.getDeletedNodes()), sessionCode);
 
             // Debug: print the resulting document and CRDT tree
             System.out.println("Final document: '" + crdtBuffer.getDocument() + "'");
@@ -248,42 +263,96 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
         // add(exportAnchor);
         expand(mainArea);
 
+        initializeSessionComponents();
+
+        HorizontalLayout sessionJoinPanel = new HorizontalLayout(sessionCodeField, joinSessionButton);
+        sessionJoinPanel.setWidthFull();
+        topBanner.add(sessionJoinPanel); // Add to your existing toolbar
     }
 
     private void updateUserPanel() {
         userPanel.removeAll();
-        userPanel.add(new Span("Connected Users:"));
-        userRegistry.getUserColors().forEach((id, color) -> {
-            Span userLabel = new Span(id.substring(0, 8));
-            userLabel.getStyle().set("color", color).set("font-weight", "bold");
-            userPanel.add(userLabel);
+        userPanel.add(new H3("Session: " + (sessionCode.isEmpty() ? "Not joined" : sessionCode)));
+        userPanel.add(new Span("Your role: " + userRole));
+        userPanel.add(new Hr());
+
+        if (sessionCode.isEmpty()) {
+            userPanel.add(new Span("Join a session to see participants"));
+            return;
+        }
+
+        // Get users in current session only
+        Map<String, UserRegistry.UserInfo> users = userRegistry.getUsersInSession(sessionCode);
+        String baseSessionCode = getBaseSessionCode(sessionCode);
+        userPanel.add(new H3("Session: " + (baseSessionCode.isEmpty() ? "Not joined" : baseSessionCode)));
+        userPanel.add(new H4("Connected Users (" + users.size() + ")"));
+
+        users.forEach((id, info) -> {
+            HorizontalLayout userEntry = new HorizontalLayout();
+            Span userIdSpan = new Span(id.substring(0, 8));
+            userIdSpan.getStyle()
+                    .set("color", info.getColor()) // Use getter
+                    .set("font-weight", "bold");
+
+            Span roleSpan = new Span(info.getRole());
+            roleSpan.getStyle()
+                    .set("font-style", "italic")
+                    .set("margin-left", "5px");
+
+            userEntry.add(userIdSpan, roleSpan);
+            userPanel.add(userEntry);
         });
     }
 
     private void renderRemoteCursors() {
-        // Remove old markers (if any)
-        editor.getElement().executeJs(
-                "Array.from(this.parentNode.querySelectorAll('.remote-cursor')).forEach(e => e.remove());");
-        // Render each remote cursor
-        userCursors.forEach((id, pos) -> {
-            if (!id.equals(userId)) {
-                String color = userRegistry.getUserColors().get(id);
-                // JS to insert a colored caret at the correct position
-                editor.getElement().executeJs(
-                        "const ta = this.inputElement;" +
-                                "const rect = ta.getBoundingClientRect();" +
-                                "const span = document.createElement('span');" +
-                                "span.className = 'remote-cursor';" +
-                                "span.style.position = 'absolute';" +
-                                "span.style.height = '1.2em';" +
-                                "span.style.width = '2px';" +
-                                "span.style.background = $1;" +
-                                "span.style.left = (ta.selectionStart === $0 ? ta.selectionStart : $0) + 'ch';" +
-                                "span.style.top = '0';" +
-                                "ta.parentNode.appendChild(span);",
-                        pos, color);
-            }
-        });
+        getUI().ifPresent(ui -> ui.access(() -> {
+            editor.getElement().executeJs(
+                    "Array.from(document.querySelectorAll('.remote-cursor')).forEach(e => e.remove());");
+
+            userCursors.forEach((id, pos) -> {
+                if (!id.equals(userId)) {
+                    String color = userRegistry.getUserColor(id);
+                    String role = userRegistry.getUserRole(id);
+                    String shortId = id.substring(0, 8);
+
+                    editor.getElement().executeJs(
+                            "const ta = this.inputElement;" +
+                                    "if (ta && ta.value) {" +
+                                    "   const pos = Math.min($0, ta.value.length);" +
+                                    "   ta.focus();" +
+                                    "   ta.setSelectionRange(pos, pos);" +
+                                    "   const rect = ta.getBoundingClientRect();" +
+                                    "   const cursor = document.createElement('div');" +
+                                    "   cursor.className = 'remote-cursor';" +
+                                    "   cursor.style.position = 'absolute';" +
+                                    "   cursor.style.height = (rect.bottom - rect.top) + 'px';" +
+                                    "   cursor.style.width = '2px';" +
+                                    "   cursor.style.background = $1;" +
+                                    "   cursor.style.left = rect.left + 'px';" +
+                                    "   cursor.style.top = rect.top + 'px';" +
+                                    "   cursor.style.pointerEvents = 'none';" +
+                                    "   cursor.style.zIndex = '100';" +
+                                    "   const tooltip = document.createElement('div');" +
+                                    "   tooltip.textContent = $2 + ' (' + $3 + ')';" +
+                                    "   tooltip.style.position = 'absolute';" +
+                                    "   tooltip.style.left = '5px';" +
+                                    "   tooltip.style.bottom = '100%';" +
+                                    "   tooltip.style.background = 'white';" +
+                                    "   tooltip.style.padding = '2px 5px';" +
+                                    "   tooltip.style.border = '1px solid #ccc';" +
+                                    "   tooltip.style.borderRadius = '3px';" +
+                                    "   tooltip.style.fontSize = '12px';" +
+                                    "   tooltip.style.color = $1;" +
+                                    "   tooltip.style.display = 'none';" +
+                                    "   cursor.appendChild(tooltip);" +
+                                    "   cursor.onmouseover = () => tooltip.style.display = 'block';" +
+                                    "   cursor.onmouseout = () => tooltip.style.display = 'none';" +
+                                    "   document.body.appendChild(cursor);" +
+                                    "}",
+                            pos, color, shortId, role);
+                }
+            });
+        }));
     }
 
     // Server push updates (for real-time syncing)
@@ -307,10 +376,59 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
     public void receiveCursor(String remoteUserId, int pos, String color) {
         if (!remoteUserId.equals(userId)) {
             userCursors.put(remoteUserId, pos);
-            userRegistry.registerUser(remoteUserId); // Ensure color is set
+            userRegistry.registerUser(remoteUserId, sessionCode, userRegistry.getUserRole(remoteUserId));
             updateUserPanel(); // <-- Add this!
             renderRemoteCursors();
         }
+    }
+
+    @Override
+    public void receiveDocumentRequest(String requesterId, String sessionCode) {
+        if (this.sessionCode.equals(sessionCode)) {
+            Broadcaster.sendDocumentState(requesterId, getCrdtBuffer().getDocument());
+        }
+    }
+
+    @Override
+    public void receiveDocumentState(String documentContent) {
+        getUI().ifPresent(ui -> ui.access(() -> {
+            getCrdtBuffer().clear();
+            String parentId = "0";
+            for (char c : documentContent.toCharArray()) {
+                getCrdtBuffer().insert(c, parentId);
+                parentId = getCrdtBuffer().getNodeIdAtPosition(getCrdtBuffer().getDocument().length() - 1);
+            }
+            editor.setValue(documentContent);
+        }));
+    }
+
+    @Override
+    public void receiveUserPresence(String userId, String role, boolean isOnline, String sessionCode) {
+        if (!this.sessionCode.equals(sessionCode))
+            return;
+
+        getUI().ifPresent(ui -> ui.access(() -> {
+            if (isOnline) {
+                userRoles.put(userId, role);
+                userRegistry.registerUser(userId, sessionCode, role);
+            } else {
+                userRoles.remove(userId);
+                userRegistry.unregisterUserFromSession(userId, sessionCode);
+                userCursors.remove(userId);
+            }
+            updateUserPanel();
+            renderRemoteCursors();
+        }));
+    }
+
+    @Override
+    public String getUserId() {
+        return userId;
+    }
+
+    @Override
+    public String getSessionCode() {
+        return this.sessionCode;
     }
 
     @Override
@@ -323,7 +441,7 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
         Broadcaster.unregister(this);
         userRegistry.unregisterUser(userId);
         userCursors.remove(userId);
-        Broadcaster.broadcastCursor(userId, -1, userColor); // -1 means "gone"
+        Broadcaster.broadcastCursor(userId, -1, userColor, sessionCode); // -1 means "gone"
         updateUserPanel();
     }
 
@@ -343,6 +461,42 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
 
         cursorPosition = position;
         userCursors.put(userId, position);
-        Broadcaster.broadcastCursor(userId, cursorPosition, userColor);
+        Broadcaster.broadcastCursor(userId, cursorPosition, userColor, sessionCode);
+    }
+
+    private void initializeSessionComponents() {
+        sessionCodeField = new TextField("Session Code");
+        joinSessionButton = new Button("Join Session", e -> joinSession());
+    }
+
+    private void joinSession() {
+        String code = sessionCodeField.getValue().trim();
+        if (!code.isEmpty()) {
+            // Clean up from previous session if any
+            if (!sessionCode.isEmpty()) {
+                Broadcaster.broadcastPresence(userId, userRole, false, getBaseSessionCode(sessionCode));
+                userRegistry.unregisterUserFromSession(userId, getBaseSessionCode(sessionCode));
+            }
+
+            this.sessionCode = code;
+            this.userRole = code.endsWith("-view") ? "viewer" : "editor";
+
+            // Register with base session code
+            String baseSessionCode = getBaseSessionCode(code);
+            userRegistry.registerUser(userId, baseSessionCode, userRole);
+            editor.setVisible(true);
+            editor.setReadOnly("viewer".equals(userRole));
+            Broadcaster.broadcastPresence(userId, userRole, true, baseSessionCode);
+            Broadcaster.requestDocumentState(userId, baseSessionCode);
+            updateUserPanel();
+        }
+    }
+
+    private String getBaseSessionCode(String code) {
+        // Remove -view or -edit suffix if present
+        if (code.endsWith("-view") || code.endsWith("-edit")) {
+            return code.substring(0, code.lastIndexOf('-'));
+        }
+        return code;
     }
 }
