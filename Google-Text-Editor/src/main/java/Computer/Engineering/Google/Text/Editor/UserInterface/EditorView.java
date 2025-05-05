@@ -3,6 +3,7 @@ package Computer.Engineering.Google.Text.Editor.UserInterface;
 import Computer.Engineering.Google.Text.Editor.model.CrdtBuffer;
 import Computer.Engineering.Google.Text.Editor.model.CrdtNode;
 import Computer.Engineering.Google.Text.Editor.model.SharedBuffer;
+import Computer.Engineering.Google.Text.Editor.model.Operation;
 import Computer.Engineering.Google.Text.Editor.sync.Broadcaster;
 import Computer.Engineering.Google.Text.Editor.services.UserRegistry;
 import Computer.Engineering.Google.Text.Editor.model.Comment;
@@ -47,6 +48,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.HashSet;
 import elemental.json.JsonObject;
 import elemental.json.JsonValue;
+
+import java.util.ArrayDeque;
+import java.util.Deque;
+
 import com.vaadin.flow.data.value.ValueChangeMode;
 import java.util.Comparator;
 
@@ -71,6 +76,12 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
     private final Div cursorContainer = new Div();
     private Button commentButton;
     private final VerticalLayout commentsPanel = new VerticalLayout();
+
+    private final Deque<Operation> undoStack = new ArrayDeque<>();
+    private final Deque<Operation> redoStack = new ArrayDeque<>();
+    private static final int MAX_UNDO_STACK_SIZE = 3;
+    private Button undoButton;
+    private Button redoButton;
 
     private CrdtBuffer getCrdtBuffer() {
         return sessionCode.isEmpty()
@@ -101,8 +112,8 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
 
         VaadinSession.getCurrent().setAttribute("userId", userId);
         // Top Toolbar Buttons (Optional for future features like undo/redo)
-        Button undoButton = new Button("Undo"); // Not yet wired
-        Button redoButton = new Button("Redo");
+        undoButton = new Button("Undo", e -> undo());
+        redoButton = new Button("Redo", e -> redo());
         // Button importButton = new Button("Import");
         //
         // Import: Upload a .txt file
@@ -214,8 +225,7 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                 """);
 
         editor.addValueChangeListener(event -> {
-            if (!event.isFromClient())
-                return;
+            if (!event.isFromClient()) return;
 
             // Get current cursor position before any modification
             PendingJavaScriptResult currentPosResult = editor.getElement().executeJs(
@@ -264,18 +274,35 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                     needsBroadcast[0] = true;
                 }
 
-                if (hasInsertions) {
-                    // Calculate the parent node id for insertion
-                    String baseParentId;
+            System.out.println("Diffing results - start: " + start + ", endOld: " + endOld + ", endNew: " + endNew);
 
-                    if (finalStart == 0) {
-                        baseParentId = "0"; // Root node
-                        System.out.println("Using ROOT node as parent for first character insertion");
-                    } else {
-                        // Get the node right before the insertion point
-                        baseParentId = getCrdtBuffer().getNodeIdAtPosition(finalStart - 1);
-                        System.out.println(
-                                "Using base parent ID: " + baseParentId + " for insertion at pos: " + finalStart);
+            // improved handle delete
+            if (endOld >= start) {
+                List<Operation> bulkDeletionOps = new ArrayList<>();
+                List<String> nodesToDelete = new ArrayList<>();
+
+                // First pass: collect all nodes to delete and their info
+                for (int pos = endOld; pos >= start; pos--) {
+                    String nodeId = .getNodeIdAtPosition(pos);
+                    if (!nodeId.equals("0")) {
+                        nodesToDelete.add(nodeId);
+
+                        // Get the actual parent ID before any deletions occur
+                        String parentId = (pos > 0) ?
+                                getCrdtBuffer().getNodeIdAtPosition(pos - 1) : "0";
+
+                        Operation deleteOp = new Operation(
+                                Operation.Type.DELETE,
+                                oldText.charAt(pos),
+                                nodeId,
+                                parentId,
+                                pos,
+                                parentId,  // previousParentId is same as parentId for deletions
+                                nodeId
+                        );
+                        bulkDeletionOps.add(deleteOp);
+
+
                     }
 
                     // Use a temporary local variable to track parent ID through the closure
@@ -305,23 +332,58 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                     needsBroadcast[0] = true;
                 }
 
-                if (needsBroadcast[0]) {
-                    // Only broadcast once at the end of all operations
-                    Broadcaster.broadcast(
-                            new ArrayList<>(getCrdtBuffer().getAllNodes()),
-                            new ArrayList<>(getCrdtBuffer().getDeletedNodes()), sessionCode);
 
-                    // Debug: print the resulting document and CRDT tree
-                    System.out.println("Final document after operations: '" + getCrdtBuffer().getDocument() + "'");
+                // Second pass: perform deletions
+                for (Operation deleteOp : bulkDeletionOps) {
+                    String[] parts = deleteOp.getNodeId().split("-");
+                    getCrdtBuffer().delete(parts[0], Integer.parseInt(parts[1]));
                 }
 
-                // IMPORTANT: Restore cursor position after all operations
-                int adjustedCursorPos = finalCursorPos;
-                if (hasDeletions && !hasInsertions) {
-                    // When just deleting, maintain position at the start of the deletion
-                    adjustedCursorPos = finalStart;
+                // Push as bulk operation if multiple deletes
+                if (bulkDeletionOps.size() > 1) {
+                    Operation bulkOp = new Operation(
+                            Operation.Type.BULK_DELETE,
+                            '\0',
+                            "bulk-" + UUID.randomUUID().toString(),
+                            "0",
+                            start,
+                            "0",
+                            "bulk-" + UUID.randomUUID().toString(),
+                            bulkDeletionOps
+                    );
+                    pushToUndoStack(bulkOp);
+                } else if (!bulkDeletionOps.isEmpty()) {
+                    pushToUndoStack(bulkDeletionOps.get(0));
+                }
+            }
+
+            // Handle insertions
+            if (start <= endNew) {
+                int insertionPoint = start;
+                String parentId = (insertionPoint == 0) ? "0" : getCrdtBuffer().getNodeIdAtPosition(insertionPoint - 1);
+
+                for (int i = start; i <= endNew; i++) {
+                    char c = newText.charAt(i);
+                    String newNodeId = getCrdtBuffer().insertAndReturnId(c, parentId);
+                    int currentPosition = insertionPoint + (i - start);
+
+                    pushToUndoStack(new Operation(
+                            Operation.Type.INSERT,
+                            c,
+                            newNodeId,
+                            parentId,
+                            currentPosition,
+                            "0",
+                            newNodeId
+                    ));
+
+                    parentId = newNodeId;
+
                 }
 
+
+            updateDocumentAndBroadcast();
+            updateUndoRedoButtons();
                 // Set the cursor position to its original location or the adjusted position
                 editor.getElement().executeJs(
                         "this.inputElement.setSelectionRange($0, $0);",
@@ -345,6 +407,7 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                             updateSelectionState(hasSelection);
                         });
             }));
+
         });
 
         // userColor is already initialized during declaration
@@ -1394,4 +1457,363 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             updateCommentsPanel();
         }
     }
+
+    private void pushToUndoStack(Operation op) {
+        System.out.println("Pushing to undo stack: " +
+                op.getType() + " '" + op.getValue() +
+                "' at " + op.getPosition() +
+                " (nodeId: " + op.getNodeId() +
+                ", parentId: " + op.getParentId() + ")");
+
+        // Clear redo stack when a new operation is performed
+        redoStack.clear();
+
+        undoStack.push(op);
+
+        // Limit stack size
+        while (undoStack.size() > MAX_UNDO_STACK_SIZE) {
+            Operation removed = undoStack.removeLast();
+            System.out.println("  Removed oldest undo operation: " +
+                    removed.getType() + " '" + removed.getValue() + "'");
+        }
+
+        printUndoRedoStacks();
+        updateUndoRedoButtons();
+    }
+
+    private void undo() {
+        
+        if (undoStack.isEmpty()) return;
+
+        Operation op = undoStack.pop();
+        System.out.println("\n=== Performing UNDO ===");
+
+        if (op.getType() == Operation.Type.BULK_DELETE) {
+            // Handle bulk deletion undo (reinsert all characters)
+            List<Operation> bulkOps = op.getBulkOperations();
+            List<Operation> redoBulkOps = new ArrayList<>();
+
+            // Process operations in reverse order for proper undo semantics
+            for (int i = bulkOps.size() - 1; i >= 0; i--) {
+                Operation deleteOp = bulkOps.get(i);
+
+                // Extract original counter from node ID
+                String[] parts = deleteOp.getOriginalNodeId().split("-");
+                String siteId = parts[0];
+                int originalCounter = Integer.parseInt(parts[1]);
+
+                // Reinsert with specific counter to maintain ID consistency
+                String newNodeId = getCrdtBuffer().insertWithCounter(
+                        deleteOp.getValue(),
+                        deleteOp.getPreviousParentId(),
+                        originalCounter
+                );
+
+                System.out.println("  Reinserted node: " + newNodeId +
+                        " (originally: " + deleteOp.getOriginalNodeId() + ")");
+
+                // Store operation for redo with the same node ID
+                redoBulkOps.add(new Operation(
+                        Operation.Type.DELETE,
+                        deleteOp.getValue(),
+                        newNodeId, // Should be the same as original node ID
+                        deleteOp.getParentId(),
+                        deleteOp.getPosition(),
+                        deleteOp.getPreviousParentId(),
+                        deleteOp.getOriginalNodeId()
+                ));
+            }
+
+            // Create a new bulk operation for the redo stack
+            Operation redoOp = new Operation(
+                    Operation.Type.BULK_DELETE,
+                    '\0',
+                    "bulk-" + UUID.randomUUID().toString(),
+                    "0",
+                    op.getPosition(),
+                    "0",
+                    "bulk-" + UUID.randomUUID().toString(),
+                    redoBulkOps
+            );
+            redoStack.push(redoOp);
+        }
+        else if (op.getType() == Operation.Type.DELETE) {
+            // Single deletion undo
+            System.out.println("  Reinserting '" + op.getValue() +
+                    "' at position " + op.getPosition() +
+                    " with parent " + op.getPreviousParentId());
+
+            // Extract counter from original node ID
+            String[] parts = op.getOriginalNodeId().split("-");
+            int originalCounter = Integer.parseInt(parts[1]);
+
+            // Reinsert with the original counter to maintain ID consistency
+            String newNodeId = getCrdtBuffer().insertWithCounter(
+                    op.getValue(),
+                    op.getPreviousParentId(),
+                    originalCounter
+            );
+
+            // Create a proper redo operation
+            redoStack.push(new Operation(
+                    Operation.Type.DELETE,
+                    op.getValue(),
+                    newNodeId, // Should be the same as original node ID
+                    op.getParentId(),
+                    op.getPosition(),
+                    op.getPreviousParentId(),
+                    op.getOriginalNodeId()
+            ));
+        }
+        else if (op.getType() == Operation.Type.INSERT) {
+            // Insert undo (delete the inserted character)
+            String nodeIdToDelete = op.getOriginalNodeId();
+            String[] parts = nodeIdToDelete.split("-");
+            System.out.println("  Deleting node: " + nodeIdToDelete);
+            getCrdtBuffer().delete(parts[0], Integer.parseInt(parts[1]));
+
+            // Create a proper redo operation that will reinsert with the same ID
+            redoStack.push(new Operation(
+                    Operation.Type.INSERT,
+                    op.getValue(),
+                    op.getNodeId(), // Use the node ID from the operation
+                    op.getParentId(),
+                    op.getPosition(),
+                    op.getPreviousParentId(),
+                    op.getOriginalNodeId()
+            ));
+        }
+
+        updateDocumentAndBroadcast();
+        updateUndoRedoButtons();
+
+
+        /*
+        CrdtNode lastInserted = getCrdtBuffer().getLastInsertedNode();
+        if (lastInserted != null) {
+            // Create delete operation for undo stack
+            Operation undoOp = new Operation(
+                    Operation.Type.DELETE,
+                    lastInserted.getCharValue(),
+                    lastInserted.getUniqueId(),
+                    lastInserted.getParentId(),
+                    getCrdtBuffer().getDocument().indexOf(lastInserted.getCharValue()),
+                    lastInserted.getParentId(),
+                    lastInserted.getUniqueId()
+            );
+
+            // Perform the actual deletion
+            getCrdtBuffer().delete(lastInserted.getSiteId(), lastInserted.getClock());
+
+            // Push to redo stack
+            redoStack.push(undoOp);
+
+            updateDocumentAndBroadcast();
+            updateUndoRedoButtons();
+        }
+
+
+         */
+    }
+
+    private void redo() {
+
+        if (redoStack.isEmpty()) return;
+
+        Operation op = redoStack.pop();
+        System.out.println("\n=== Performing REDO ===");
+
+        if (op.getType() == Operation.Type.BULK_DELETE) {
+            // Handle bulk deletion redo (delete all characters again)
+            List<Operation> bulkOps = op.getBulkOperations();
+            List<Operation> undoBulkOps = new ArrayList<>();
+
+            for (Operation deleteOp : bulkOps) {
+                String[] parts = deleteOp.getNodeId().split("-");
+                System.out.println("  Deleting node: " + deleteOp.getNodeId());
+                getCrdtBuffer().delete(parts[0], Integer.parseInt(parts[1]));
+
+                // Create operation for undo with the same parameters
+                undoBulkOps.add(new Operation(
+                        Operation.Type.DELETE,
+                        deleteOp.getValue(),
+                        deleteOp.getNodeId(),
+                        deleteOp.getParentId(),
+                        deleteOp.getPosition(),
+                        deleteOp.getPreviousParentId(),
+                        deleteOp.getOriginalNodeId()
+                ));
+            }
+
+            // Push a new operation for the undo stack with the original parameters
+            undoStack.push(new Operation(
+                    Operation.Type.BULK_DELETE,
+                    op.getValue(),
+                    op.getNodeId(),
+                    op.getParentId(),
+                    op.getPosition(),
+                    op.getPreviousParentId(),
+                    op.getOriginalNodeId(),
+                    undoBulkOps
+            ));
+        }
+        else if (op.getType() == Operation.Type.DELETE) {
+            // Single deletion redo
+            String[] parts = op.getNodeId().split("-");
+            System.out.println("  Deleting node: " + op.getNodeId());
+            getCrdtBuffer().delete(parts[0], Integer.parseInt(parts[1]));
+
+            // Push to undo stack with the original parameters to maintain consistency
+            undoStack.push(new Operation(
+                    Operation.Type.DELETE,
+                    op.getValue(),
+                    op.getNodeId(),
+                    op.getParentId(),
+                    op.getPosition(),
+                    op.getPreviousParentId(),
+                    op.getOriginalNodeId()
+            ));
+        }
+        else if (op.getType() == Operation.Type.INSERT) {
+            // Insert redo - need to retain the original nodeId reference
+            System.out.println("  Reinserting '" + op.getValue() +
+                    "' at position " + op.getPosition() +
+                    " with parent " + op.getParentId());
+
+            // Get the correct parent ID for the current document state
+            String actualParentId;
+            if (op.getPosition() == 0) {
+                actualParentId = "0"; // Root
+            } else {
+                // Get the parent ID from the current document state at position-1
+                actualParentId = getCrdtBuffer().getNodeIdAtPosition(op.getPosition() - 1);
+            }
+
+            // Extract the counter from the original node ID
+            String[] parts = op.getOriginalNodeId().split("-");
+            int originalCounter = Integer.parseInt(parts[1]);
+
+            // Insert with specific counter to maintain ID consistency
+            String newNodeId = getCrdtBuffer().insertWithCounter(
+                    op.getValue(),
+                    actualParentId, // Use the current parent ID from document state
+                    originalCounter
+            );
+
+            System.out.println("  Created node: " + newNodeId + " (should match " + op.getNodeId() + ")");
+
+            // Push to undo stack with the appropriate parameters
+            undoStack.push(new Operation(
+                    Operation.Type.INSERT,
+                    op.getValue(),
+                    newNodeId,
+                    actualParentId, // Store current parent ID
+                    op.getPosition(),
+                    actualParentId, // Previous parent is same for insert
+                    op.getOriginalNodeId()
+            ));
+        }
+
+        updateDocumentAndBroadcast();
+        updateUndoRedoButtons();
+
+
+        /*
+        CrdtNode lastDeleted = getCrdtBuffer().getLastDeletedNode();
+        if (lastDeleted != null) {
+            // Create insert operation for redo stack
+            Operation redoOp = new Operation(
+                    Operation.Type.INSERT,
+                    lastDeleted.getCharValue(),
+                    lastDeleted.getUniqueId(),
+                    lastDeleted.getParentId(),
+                    getCrdtBuffer().getDocument().length(), // Approximate position
+                    lastDeleted.getParentId(),
+                    lastDeleted.getUniqueId()
+            );
+
+            // Perform the actual re-insertion
+            lastDeleted.setDeleted(false);
+
+            // Push to undo stack
+            undoStack.push(redoOp);
+
+            updateDocumentAndBroadcast();
+            updateUndoRedoButtons();
+
+
+        }
+
+         */
+    }
+
+    /**
+     * Updates the editor UI with the current document state and broadcasts
+     * changes to all connected clients.
+     */
+    private void updateDocumentAndBroadcast() {
+        // Get the current document text from the CRDT buffer
+        String doc = getCrdtBuffer().getDocument();
+
+        // Save current cursor position before updating
+        int cursorPos = cursorPosition;
+
+        // Update the editor value
+        editor.setValue(doc);
+
+        // Attempt to restore cursor position
+        editor.getElement().executeJs(
+                "this.inputElement.setSelectionRange($0, $0);",
+                Math.min(cursorPos, doc.length())
+        );
+
+        // Broadcast changes to all clients in this session
+        Broadcaster.broadcast(
+                new ArrayList<>(getCrdtBuffer().getAllNodes()),
+                new ArrayList<>(getCrdtBuffer().getDeletedNodes()),
+                sessionCode
+        );
+
+        // Update cursor positions after document changes
+        editor.getElement().executeJs(
+                "if (this.inputElement) { return this.inputElement.selectionStart; }"
+        ).then(Integer.class, pos -> {
+            cursorPosition = pos;
+            Broadcaster.broadcastCursor(userId, cursorPosition, userColor, sessionCode);
+        });
+
+        // Update undo/redo buttons
+        updateUndoRedoButtons();
+
+        // Log the current document state for debugging
+        System.out.println("Updated document: '" + (doc.length() > 50 ?
+                doc.substring(0, 47) + "..." :
+                doc) + "'");
+        System.out.println("Document length: " + doc.length());
+    }
+    private void updateUndoRedoButtons() {
+        undoButton.setEnabled(!undoStack.isEmpty());
+        redoButton.setEnabled(!redoStack.isEmpty());
+    }
+    private void printUndoRedoStacks() {
+        System.out.println("\n=== Current Undo/Redo Stacks ===");
+        System.out.println("Undo Stack (top first):");
+        undoStack.forEach(op -> System.out.println(
+                "  " + op.getType() + " '" + op.getValue() +
+                        "' at " + op.getPosition() +
+                        " (nodeId: " + op.getNodeId() +
+                        ", parentId: " + op.getParentId() + ")"
+        ));
+
+        System.out.println("\nRedo Stack (top first):");
+        redoStack.forEach(op -> System.out.println(
+                "  " + op.getType() + " '" + op.getValue() +
+                        "' at " + op.getPosition() +
+                        " (nodeId: " + op.getNodeId() +
+                        ", parentId: " + op.getParentId() + ")"
+        ));
+        System.out.println("==============================\n");
+    }
+
 }
+

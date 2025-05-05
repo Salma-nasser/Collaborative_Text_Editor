@@ -14,12 +14,15 @@ public class CrdtBuffer {
     private List<CrdtNode> deletedNodes = new ArrayList<>();
     private final List<Comment> comments = new ArrayList<>();
     Logger logger = LoggerFactory.getLogger(CrdtBuffer.class);
+    private Stack<CrdtNode> operationHistory = new Stack<>();
+    private Stack<CrdtNode> redoHistory = new Stack<>();
 
     public CrdtBuffer(String siteId) {
         this.siteId = siteId;
         this.clock = 0;
         this.nodes = new ArrayList<>();
         this.deletedSet = new HashSet<>();
+
     }
 
     // basic case
@@ -218,6 +221,8 @@ public class CrdtBuffer {
             // Mark this node as deleted
             nodeToDelete.setDeleted(true);
             deletedNodes.add(nodeToDelete);
+            operationHistory.push(nodeToDelete); // Track delete operation
+            redoHistory.clear();
 
             // Important: Find all children of this node and reassign their parent
             for (CrdtNode node : nodes) {
@@ -288,10 +293,119 @@ public class CrdtBuffer {
         }
         CrdtNode newNode = new CrdtNode(siteId, clock, counter, parentId, charValue);
         nodes.add(newNode);
+        operationHistory.push(newNode); // Track insert operation
+        redoHistory.clear();
         Collections.sort(nodes);
         logger.debug("Inserted node: " + newNode);
         return newNode.getUniqueId();
     }
+
+
+
+    /*
+    public String insertWithCounter(char charValue, String parentId, int counter) {
+        // Track existing counters to avoid conflicts
+        Set<Integer> existingCounters = new HashSet<>();
+        for (CrdtNode node : nodes) {
+            if (node.getParentId().equals(parentId)) {
+                existingCounters.add(node.getCounter());
+            }
+        }
+        // Ensure the provided counter is unique
+        while (existingCounters.contains(counter)) {
+            counter++;
+        }
+        CrdtNode newNode = new CrdtNode(siteId, clock, counter, parentId, charValue);
+        nodes.add(newNode);
+        Collections.sort(nodes);
+        clock++;
+        return newNode.getUniqueId();
+    }
+    */
+
+    public String insertWithCounter(char value, String parentId, int counter) {
+        // Track existing counters to avoid conflicts
+        Set<Integer> existingCounters = new HashSet<>();
+        for (CrdtNode node : nodes) {
+            if (node.getParentId().equals(parentId)) {
+                existingCounters.add(node.getCounter());
+            }
+        }
+
+        // Ensure the provided counter is unique
+        while (existingCounters.contains(counter)) {
+            counter++;
+        }
+
+        // Create and add the new node
+        CrdtNode newNode = new CrdtNode(siteId, clock, counter, parentId, value);
+        nodes.add(newNode);
+        Collections.sort(nodes);
+
+        // Increment the clock after successful insertion
+        clock++;
+
+        // Log the insertion
+        logger.debug("Inserted node with specific counter: " + newNode.getUniqueId() +
+                " (char: '" + value + "', parent: " + parentId + ")");
+
+        return newNode.getUniqueId();
+    }
+    public boolean undo() {
+        if (nodes.isEmpty()) return false;
+
+        // Find the last non-deleted node
+        CrdtNode lastNode = null;
+        for (int i = nodes.size()-1; i >= 0; i--) {
+            if (!nodes.get(i).isDeleted()) {
+                lastNode = nodes.get(i);
+                break;
+            }
+        }
+
+        if (lastNode != null) {
+            delete(lastNode.getSiteId(), lastNode.getClock());
+            return true;
+        }
+        return false;
+    }
+
+    public boolean redo() {
+        // Find the most recently deleted node
+        CrdtNode lastDeleted = null;
+        for (int i = nodes.size()-1; i >= 0; i--) {
+            if (nodes.get(i).isDeleted()) {
+                lastDeleted = nodes.get(i);
+                break;
+            }
+        }
+
+        if (lastDeleted != null) {
+            lastDeleted.setDeleted(false);
+            return true;
+        }
+        return false;
+    }
+
+    public CrdtNode getLastInsertedNode() {
+        for (int i = nodes.size()-1; i >= 0; i--) {
+            if (!nodes.get(i).isDeleted()) {
+                return nodes.get(i);
+            }
+        }
+        return null;
+    }
+
+    public CrdtNode getLastDeletedNode() {
+        for (int i = nodes.size()-1; i >= 0; i--) {
+            if (nodes.get(i).isDeleted()) {
+                return nodes.get(i);
+            }
+        }
+        return null;
+    }
+}
+
 
     // Add a comment to a text selection
     public Comment addComment(String authorId, String authorColor, String content, int startPos, int endPos) {
