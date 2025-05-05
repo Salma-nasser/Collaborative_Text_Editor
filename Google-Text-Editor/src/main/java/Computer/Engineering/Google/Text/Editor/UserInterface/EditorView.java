@@ -207,7 +207,7 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             // Improved deletion logic
             if (endOld >= start) {
                 System.out.println("Deleting characters from position " + start + " to " + endOld);
-                
+
                 // First, identify all specific nodes that need deletion
                 List<String> nodesToDelete = new ArrayList<>();
                 for (int pos = start; pos <= endOld; pos++) {
@@ -217,7 +217,7 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                         System.out.println("Marking node for deletion: " + nodeId + " at position " + pos);
                     }
                 }
-                
+
                 // Then delete them one by one
                 for (String nodeId : nodesToDelete) {
                     String[] parts = nodeId.split("-");
@@ -280,6 +280,8 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
 
         HorizontalLayout sessionJoinPanel = new HorizontalLayout(sessionCodeField, joinSessionButton);
         sessionJoinPanel.setWidthFull();
+        sessionJoinPanel.setAlignItems(FlexComponent.Alignment.BASELINE); // Align items on the same baseline
+        sessionJoinPanel.setSpacing(true); // Add spacing between components
         topBanner.add(sessionJoinPanel); // Add to your existing toolbar
 
         addEditorStyles();
