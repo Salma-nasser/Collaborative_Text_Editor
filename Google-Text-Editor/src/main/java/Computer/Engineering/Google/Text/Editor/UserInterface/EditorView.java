@@ -255,11 +255,37 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                     }
                 }
                 
-                // Then delete them one by one
+                // Check for comments that should be deleted
+                List<Comment> commentsToDelete = new ArrayList<>();
+                for (Comment comment : crdtBuffer.getComments()) {
+                    // If the comment's entire text range is within the deleted range, or if the
+                    // comment start is in the deletion range, mark it for removal
+                    if ((comment.getStartPosition() >= start && comment.getEndPosition() <= endOld) ||
+                        (comment.getStartPosition() >= start && comment.getStartPosition() <= endOld)) {
+                        commentsToDelete.add(comment);
+                        System.out.println("Marking comment for deletion: " + comment.getCommentId() + " at position " + 
+                                        comment.getStartPosition() + "-" + comment.getEndPosition());
+                    }
+                }
+                
+                // Then delete nodes one by one
                 for (String nodeId : nodesToDelete) {
                     String[] parts = nodeId.split("-");
                     System.out.println("Deleting node: " + nodeId);
                     crdtBuffer.delete(parts[0], Integer.parseInt(parts[1]));
+                }
+                
+                // Delete the affected comments
+                for (Comment comment : commentsToDelete) {
+                    crdtBuffer.removeComment(comment.getCommentId());
+                    // Notify others that the comment has been removed
+                    Broadcaster.broadcastCommentRemoval(comment.getCommentId(), sessionCode);
+                    System.out.println("Deleted comment: " + comment.getCommentId());
+                }
+                
+                // Update the comments panel if any comments were deleted
+                if (!commentsToDelete.isEmpty()) {
+                    updateCommentsPanel();
                 }
             }
 
