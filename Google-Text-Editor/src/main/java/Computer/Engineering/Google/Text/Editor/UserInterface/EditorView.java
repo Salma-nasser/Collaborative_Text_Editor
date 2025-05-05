@@ -204,11 +204,24 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
 
             System.out.println("Diffing results - start: " + start + ", endOld: " + endOld + ", endNew: " + endNew);
 
-            // Handle deletions
-            for (int i = start; i <= endOld; i++) {
-                String nodeIdToDelete = crdtBuffer.getNodeIdAtPosition(start); // always delete at logical position
-                if (!nodeIdToDelete.equals("0")) {
-                    String[] parts = nodeIdToDelete.split("-");
+            // Improved deletion logic
+            if (endOld >= start) {
+                System.out.println("Deleting characters from position " + start + " to " + endOld);
+                
+                // First, identify all specific nodes that need deletion
+                List<String> nodesToDelete = new ArrayList<>();
+                for (int pos = start; pos <= endOld; pos++) {
+                    String nodeId = crdtBuffer.getNodeIdAtPosition(pos);
+                    if (!nodeId.equals("0")) {
+                        nodesToDelete.add(nodeId);
+                        System.out.println("Marking node for deletion: " + nodeId + " at position " + pos);
+                    }
+                }
+                
+                // Then delete them one by one
+                for (String nodeId : nodesToDelete) {
+                    String[] parts = nodeId.split("-");
+                    System.out.println("Deleting node: " + nodeId);
                     crdtBuffer.delete(parts[0], Integer.parseInt(parts[1]));
                 }
             }
@@ -268,6 +281,10 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
         HorizontalLayout sessionJoinPanel = new HorizontalLayout(sessionCodeField, joinSessionButton);
         sessionJoinPanel.setWidthFull();
         topBanner.add(sessionJoinPanel); // Add to your existing toolbar
+
+        addEditorStyles();
+        setupEnhancedCursorTracking();
+        schedulePeriodicCursorUpdates();
     }
 
     private void updateUserPanel() {
@@ -306,49 +323,113 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
 
     private void renderRemoteCursors() {
         getUI().ifPresent(ui -> ui.access(() -> {
+            // Remove all existing cursors first
             editor.getElement().executeJs(
                     "Array.from(document.querySelectorAll('.remote-cursor')).forEach(e => e.remove());");
 
             userCursors.forEach((id, pos) -> {
-                if (!id.equals(userId)) {
+                // Don't render your own cursor and don't render viewers' cursors
+                if (!id.equals(userId) && !userRegistry.getUserRole(id).equals("viewer")) {
                     String color = userRegistry.getUserColor(id);
                     String role = userRegistry.getUserRole(id);
-                    String shortId = id.substring(0, 8);
+                    String shortId = id.substring(0, 6);
 
                     editor.getElement().executeJs(
-                            "const ta = this.inputElement;" +
-                                    "if (ta && ta.value) {" +
-                                    "   const pos = Math.min($0, ta.value.length);" +
-                                    "   ta.focus();" +
-                                    "   ta.setSelectionRange(pos, pos);" +
-                                    "   const rect = ta.getBoundingClientRect();" +
-                                    "   const cursor = document.createElement('div');" +
-                                    "   cursor.className = 'remote-cursor';" +
-                                    "   cursor.style.position = 'absolute';" +
-                                    "   cursor.style.height = (rect.bottom - rect.top) + 'px';" +
-                                    "   cursor.style.width = '2px';" +
-                                    "   cursor.style.background = $1;" +
-                                    "   cursor.style.left = rect.left + 'px';" +
-                                    "   cursor.style.top = rect.top + 'px';" +
-                                    "   cursor.style.pointerEvents = 'none';" +
-                                    "   cursor.style.zIndex = '100';" +
-                                    "   const tooltip = document.createElement('div');" +
-                                    "   tooltip.textContent = $2 + ' (' + $3 + ')';" +
-                                    "   tooltip.style.position = 'absolute';" +
-                                    "   tooltip.style.left = '5px';" +
-                                    "   tooltip.style.bottom = '100%';" +
-                                    "   tooltip.style.background = 'white';" +
-                                    "   tooltip.style.padding = '2px 5px';" +
-                                    "   tooltip.style.border = '1px solid #ccc';" +
-                                    "   tooltip.style.borderRadius = '3px';" +
-                                    "   tooltip.style.fontSize = '12px';" +
-                                    "   tooltip.style.color = $1;" +
-                                    "   tooltip.style.display = 'none';" +
-                                    "   cursor.appendChild(tooltip);" +
-                                    "   cursor.onmouseover = () => tooltip.style.display = 'block';" +
-                                    "   cursor.onmouseout = () => tooltip.style.display = 'none';" +
-                                    "   document.body.appendChild(cursor);" +
-                                    "}",
+                            """
+                                        (function() {
+                                            const ta = this.inputElement;
+                                            if (!ta || pos < 0) return;
+
+                                            // Save original selection
+                                            const originalStart = ta.selectionStart;
+                                            const originalEnd = ta.selectionEnd;
+
+                                            // Move to position we want to show cursor for
+                                            ta.focus();
+                                            ta.setSelectionRange($0, $0);
+
+                                            // Get text coordinates (this uses a helper function since position calculation is complex)
+                                            function getCaretCoordinates() {
+                                                const rect = ta.getBoundingClientRect();
+                                                const position = $0;
+
+                                                // Create a mirror div to calculate position
+                                                const mirror = document.createElement('div');
+                                                mirror.style.position = 'absolute';
+                                                mirror.style.top = '0';
+                                                mirror.style.left = '0';
+                                                mirror.style.visibility = 'hidden';
+                                                mirror.style.whiteSpace = 'pre-wrap';
+                                                mirror.style.wordWrap = 'break-word';
+                                                mirror.style.font = window.getComputedStyle(ta).font;
+                                                mirror.style.padding = window.getComputedStyle(ta).padding;
+
+                                                // Add content up to cursor position
+                                                const textBeforeCursor = ta.value.substring(0, position);
+                                                mirror.textContent = textBeforeCursor;
+
+                                                // Add a span where cursor would be
+                                                const span = document.createElement('span');
+                                                span.textContent = '.';
+                                                mirror.appendChild(span);
+
+                                                document.body.appendChild(mirror);
+                                                const spanRect = span.getBoundingClientRect();
+                                                document.body.removeChild(mirror);
+
+                                                return {
+                                                    left: spanRect.left - rect.left + parseInt(window.getComputedStyle(ta).paddingLeft),
+                                                    top: spanRect.top - rect.top
+                                                };
+                                            }
+
+                                            // Get cursor position
+                                            const coords = getCaretCoordinates();
+                                            const lineHeight = parseFloat(window.getComputedStyle(ta).lineHeight);
+
+                                            // Create cursor element
+                                            const cursor = document.createElement('div');
+                                            cursor.className = 'remote-cursor';
+                                            cursor.style.position = 'absolute';
+                                            cursor.style.backgroundColor = $1;
+                                            cursor.style.width = '2px';
+                                            cursor.style.height = (lineHeight || 20) + 'px';
+
+                                            // Add user label
+                                            const label = document.createElement('div');
+                                            label.style.position = 'absolute';
+                                            label.style.top = '-20px';
+                                            label.style.left = '-3px';
+                                            label.style.backgroundColor = $1;
+                                            label.style.color = 'white';
+                                            label.style.padding = '2px 6px';
+                                            label.style.borderRadius = '3px';
+                                            label.style.fontSize = '12px';
+                                            label.style.whiteSpace = 'nowrap';
+                                            label.textContent = $2 + ' (' + $3 + ')';
+                                            cursor.appendChild(label);
+
+                                            // Position cursor relative to text area
+                                            const rect = ta.getBoundingClientRect();
+                                            document.body.appendChild(cursor);
+
+                                            cursor.style.left = (rect.left + coords.left) + 'px';
+                                            cursor.style.top = (rect.top + coords.top) + 'px';
+
+                                            // Add animation for blinking effect
+                                            cursor.animate([
+                                                { opacity: 1 },
+                                                { opacity: 0.3 },
+                                                { opacity: 1 }
+                                            ], {
+                                                duration: 1000,
+                                                iterations: Infinity
+                                            });
+
+                                            // Restore original selection
+                                            ta.setSelectionRange(originalStart, originalEnd);
+                                        })();
+                                    """,
                             pos, color, shortId, role);
                 }
             });
@@ -369,16 +450,23 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             editor.getElement().executeJs(
                     "this.inputElement.setSelectionRange($0, $0);",
                     Math.min(pos, doc.length()));
+
+            // Add this line to update remote cursors after document changes
+            renderRemoteCursors();
         }));
     }
 
     @Override
     public void receiveCursor(String remoteUserId, int pos, String color) {
+        // Don't process your own cursor updates
         if (!remoteUserId.equals(userId)) {
-            userCursors.put(remoteUserId, pos);
-            userRegistry.registerUser(remoteUserId, sessionCode, userRegistry.getUserRole(remoteUserId));
-            updateUserPanel(); // <-- Add this!
-            renderRemoteCursors();
+            getUI().ifPresent(ui -> ui.access(() -> {
+                // Store cursor position
+                userCursors.put(remoteUserId, pos);
+
+                // Re-render all cursors
+                renderRemoteCursors();
+            }));
         }
     }
 
@@ -448,20 +536,13 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
     // Add ClientCallable method to receive cursor position updates
     @ClientCallable
     private void handleCursorPosition(int position) {
-        System.out.println("Cursor position updated: " + position +
-                " (current document length: " + crdtBuffer.getDocument().length() + ")");
-
-        // Log what character is before cursor
-        if (position > 0) {
-            String doc = crdtBuffer.getDocument();
-            String nodeId = crdtBuffer.getNodeIdAtPosition(position - 1);
-            System.out.println("Character before cursor: '" +
-                    doc.charAt(position - 1) + "' with ID: " + nodeId);
+        // Only broadcast cursor if we're an editor, not a viewer
+        if (!"viewer".equals(userRole)) {
+            System.out.println("Cursor position updated: " + position);
+            cursorPosition = position;
+            userCursors.put(userId, position);
+            Broadcaster.broadcastCursor(userId, cursorPosition, userColor, sessionCode);
         }
-
-        cursorPosition = position;
-        userCursors.put(userId, position);
-        Broadcaster.broadcastCursor(userId, cursorPosition, userColor, sessionCode);
     }
 
     private void initializeSessionComponents() {
@@ -498,5 +579,88 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             return code.substring(0, code.lastIndexOf('-'));
         }
         return code;
+    }
+
+    private void addEditorStyles() {
+        // Add styles to document head
+        getElement().executeJs(
+                "const style = document.createElement('style');" +
+                        "style.textContent = `" +
+                        // Remote cursor styles
+                        ".remote-cursor {" +
+                        "    position: absolute;" +
+                        "    height: 20px;" +
+                        "    width: 2px;" +
+                        "    pointer-events: none;" +
+                        "    z-index: 1000;" +
+                        "    animation: blink 1s infinite;" +
+                        "}" +
+                        // Cursor label with user info
+                        ".cursor-label {" +
+                        "    position: absolute;" +
+                        "    top: -18px;" +
+                        "    left: 0px;" +
+                        "    font-size: 12px;" +
+                        "    padding: 0px 4px;" +
+                        "    white-space: nowrap;" +
+                        "    border-radius: 3px;" +
+                        "    color: white;" +
+                        "}" +
+                        // Text highlighting by author
+                        ".text-span {" +
+                        "    display: inline;" +
+                        "    padding: 0;" +
+                        "    margin: 0;" +
+                        "    border-radius: 2px;" +
+                        "}" +
+                        "@keyframes blink {" +
+                        "    0%, 100% { opacity: 1; }" +
+                        "    50% { opacity: 0.3; }" +
+                        "}`;" +
+                        "document.head.appendChild(style);");
+    }
+
+    private void setupEnhancedCursorTracking() {
+        // Add this method to your class
+        editor.getElement().executeJs("""
+                    this.addEventListener('click', function() {
+                        this.$server.handleCursorPosition(this.inputElement.selectionStart);
+                    });
+                    this.addEventListener('keyup', function(e) {
+                        this.$server.handleCursorPosition(this.inputElement.selectionStart);
+                    });
+                    this.addEventListener('focus', function() {
+                        this.$server.handleCursorPosition(this.inputElement.selectionStart);
+                    });
+                    this.addEventListener('mousemove', function(e) {
+                        if (e.buttons === 1) { // Mouse button is pressed
+                            this.$server.handleCursorPosition(this.inputElement.selectionStart);
+                        }
+                    });
+                    this.addEventListener('selectionchange', function() {
+                        this.$server.handleCursorPosition(this.inputElement.selectionStart);
+                    });
+                """);
+    }
+
+    private void schedulePeriodicCursorUpdates() {
+        // Add this method to your class
+        getUI().ifPresent(ui -> {
+            new Thread(() -> {
+                while (true) {
+                    try {
+                        Thread.sleep(2000); // Update every 2 seconds
+                        ui.access(() -> {
+                            if (!userRole.equals("viewer") && !sessionCode.isEmpty()) {
+                                Broadcaster.broadcastCursor(userId, cursorPosition, userColor, sessionCode);
+                            }
+                            renderRemoteCursors();
+                        });
+                    } catch (InterruptedException e) {
+                        break;
+                    }
+                }
+            }).start();
+        });
     }
 }

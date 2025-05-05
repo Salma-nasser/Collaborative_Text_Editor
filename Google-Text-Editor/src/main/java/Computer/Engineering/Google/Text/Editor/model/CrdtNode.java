@@ -52,7 +52,12 @@ public class CrdtNode implements Comparable<CrdtNode> {
     public int getCounter() {
         return counter;
     }
-
+    public void setParentId(String parentId) {
+        this.parentId = parentId;
+    }
+    public void setDeleted(boolean deleted) {
+        this.deleted = deleted;
+    }
     @Override
     public int compareTo(CrdtNode other) {
         // First compare by parentId (group siblings)
