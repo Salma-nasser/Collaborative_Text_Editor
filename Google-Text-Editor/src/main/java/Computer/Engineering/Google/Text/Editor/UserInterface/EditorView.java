@@ -1,11 +1,11 @@
 package Computer.Engineering.Google.Text.Editor.UserInterface;
 
-import Computer.Engineering.Google.Text.Editor.model.Comment;
 import Computer.Engineering.Google.Text.Editor.model.CrdtBuffer;
 import Computer.Engineering.Google.Text.Editor.model.CrdtNode;
 import Computer.Engineering.Google.Text.Editor.model.SharedBuffer;
 import Computer.Engineering.Google.Text.Editor.sync.Broadcaster;
 import Computer.Engineering.Google.Text.Editor.services.UserRegistry;
+import Computer.Engineering.Google.Text.Editor.model.Comment;
 
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.orderedlayout.*;
@@ -20,9 +20,8 @@ import com.vaadin.flow.component.html.Anchor;
 import com.vaadin.flow.component.html.H3;
 import com.vaadin.flow.component.html.H4;
 import com.vaadin.flow.component.html.Hr;
-import com.vaadin.flow.component.html.Div;
-import com.vaadin.flow.component.dialog.Dialog;
 import com.vaadin.flow.component.html.Paragraph;
+import com.vaadin.flow.component.dialog.Dialog;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -31,9 +30,7 @@ import com.vaadin.flow.component.DetachEvent;
 
 import java.util.UUID;
 import java.util.Map;
-import elemental.json.JsonObject; // Import JsonObject from Vaadin's elemental.json package
 import java.util.HashMap;
-import java.util.concurrent.TimeUnit;
 import com.vaadin.flow.server.VaadinSession;
 
 import java.nio.charset.StandardCharsets;
@@ -50,16 +47,16 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.HashSet;
 import elemental.json.JsonObject;
 import elemental.json.JsonValue;
+import com.vaadin.flow.data.value.ValueChangeMode;
+import java.util.Comparator;
 
 @Route("")
 @StyleSheet("context://styles/cursor-styles.css")
 public class EditorView extends VerticalLayout implements Broadcaster.BroadcastListener {
-
-    // Don't initialize with the shared instance immediately
-    private CrdtBuffer crdtBuffer;
+    private final CrdtBuffer crdtBuffer = SharedBuffer.getInstance();
     private TextArea editor;
     private int cursorPosition = 0;
-
+    
     private final VerticalLayout userPanel = new VerticalLayout();
     private final UserRegistry userRegistry = UserRegistry.getInstance();
     private final String userId = UUID.randomUUID().toString();
@@ -72,9 +69,8 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
     private final Map<String, String> userRoles = new HashMap<>();
     private final Map<String, CursorOverlay> cursorOverlays = new ConcurrentHashMap<>();
     private final Div cursorContainer = new Div();
-
     private Button commentButton;
-    private final Map<String, Div> commentMarkers = new HashMap<>();
+    private final VerticalLayout commentsPanel = new VerticalLayout();
 
     private CrdtBuffer getCrdtBuffer() {
         return sessionCode.isEmpty()
@@ -82,10 +78,26 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                 : SharedBuffer.getInstance(sessionCode);
     }
 
-    // Then in your constructor:
     public EditorView() {
-        // Initialize with a private buffer instance
-        this.crdtBuffer = new CrdtBuffer("temp-" + userId);
+        // First initialize editor
+        editor = new TextArea();
+        editor.setWidthFull();
+        editor.setHeight("600px");
+        editor.setValueChangeMode(ValueChangeMode.EAGER);
+        // Add any other editor configuration...
+
+        // Now it's safe to call methods that use editor
+        initializeSessionComponents();
+        initializeCommentComponents();
+
+        // And you can add listeners to editor
+        editor.getElement().executeJs("""
+            this.addEventListener('click', function() {
+                console.log('Cursor click: ' + this.inputElement.selectionStart);
+                this.$server.handleCursorPosition(this.inputElement.selectionStart);
+            });
+            // Rest of your event listeners...
+        """);
 
         VaadinSession.getCurrent().setAttribute("userId", userId);
         // Top Toolbar Buttons (Optional for future features like undo/redo)
@@ -157,11 +169,10 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
         // Set visibility of the export anchor as needed (it doesn't need to be visible
         // in the layout)
         exportAnchor.setVisible(false);
-        initializeSessionComponents();
-        initializeCommentComponents();
 
         HorizontalLayout topBanner = new HorizontalLayout(
-                new HorizontalLayout(undoButton, redoButton, commentButton), // Add comment button
+                new HorizontalLayout(undoButton, redoButton),
+                new HorizontalLayout(commentButton), // Add comment button in the middle
                 new HorizontalLayout(importUpload, exportButton));
         topBanner.setWidthFull();
         topBanner.setJustifyContentMode(FlexComponent.JustifyContentMode.BETWEEN);
@@ -169,7 +180,6 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
         topBanner.getStyle().set("background-color", "#f0f0f0").set("padding", "10px");
 
         // Editor Setup: TextArea with CRDT logic for typing
-        editor = new TextArea();
         editor.setWidthFull();
         editor.setHeightFull();
         editor.getStyle().set("resize", "none");
@@ -234,7 +244,7 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             // Improved deletion logic
             if (endOld >= start) {
                 System.out.println("Deleting characters from position " + start + " to " + endOld);
-
+                
                 // First, identify all specific nodes that need deletion
                 List<String> nodesToDelete = new ArrayList<>();
                 for (int pos = start; pos <= endOld; pos++) {
@@ -244,7 +254,7 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                         System.out.println("Marking node for deletion: " + nodeId + " at position " + pos);
                     }
                 }
-
+                
                 // Then delete them one by one
                 for (String nodeId : nodesToDelete) {
                     String[] parts = nodeId.split("-");
@@ -283,14 +293,40 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             crdtBuffer.printBuffer();
         });
 
+        // Add this after creating the editor in your constructor
+        editor.getElement().addEventListener("mouseup", e -> {
+            getUI().ifPresent(ui -> ui.access(() -> {
+                editor.getElement().executeJs(
+                    "return {start: this.inputElement.selectionStart, end: this.inputElement.selectionEnd}"
+                ).then(JsonObject.class, range -> {
+                    int start = (int) range.getNumber("start");
+                    int end = (int) range.getNumber("end");
+                    boolean hasSelection = start != end;
+                    
+                    System.out.println("Direct selection handler: " + start + " to " + end + 
+                                    " (hasSelection=" + hasSelection + ")");
+                    updateSelectionState(hasSelection);
+                });
+            }));
+        });
+
         // userColor is already initialized during declaration
 
         userPanel.setWidth("200px");
         userPanel.getStyle().set("background-color", "#f9f9f9");
         updateUserPanel();
 
-        // Add userPanel to your layout
-        HorizontalLayout mainArea = new HorizontalLayout(userPanel, editor);
+        // Initialize comments panel
+        commentsPanel.setWidth("250px");
+        commentsPanel.getStyle()
+            .set("background-color", "#f9f9f9")
+            .set("border-left", "1px solid #ddd")
+            .set("padding", "10px")
+            .set("overflow-y", "auto");
+        commentsPanel.add(new H3("Comments"));
+
+        // Update the layout to include comments panel
+        HorizontalLayout mainArea = new HorizontalLayout(userPanel, editor, commentsPanel);
         mainArea.setSizeFull();
         mainArea.setFlexGrow(1, editor);
 
@@ -305,14 +341,12 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
 
         HorizontalLayout sessionJoinPanel = new HorizontalLayout(sessionCodeField, joinSessionButton);
         sessionJoinPanel.setWidthFull();
-        sessionJoinPanel.setAlignItems(FlexComponent.Alignment.BASELINE); // Align items on the same baseline
-        sessionJoinPanel.setSpacing(true); // Add spacing between components
         topBanner.add(sessionJoinPanel); // Add to your existing toolbar
 
         addEditorStyles();
         setupEnhancedCursorTracking();
-        schedulePeriodicCursorUpdates();
         setupSelectionTracking();
+        schedulePeriodicCursorUpdates();
 
         editor.getElement().getParent().appendChild(cursorContainer.getElement());
         cursorContainer.getStyle()
@@ -543,36 +577,21 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
     // Server push updates (for real-time syncing)
     @Override
     public void receiveBroadcast(List<CrdtNode> incomingNodes, List<CrdtNode> incomingDeleted) {
-        getUI().ifPresent(ui -> {
-            // Use access() to update UI even in background tabs
-            ui.access(() -> {
-                // Store cursor position before update
-                int cursorPos = getCursorPosition();
+        getUI().ifPresent(ui -> ui.access(() -> {
+            crdtBuffer.merge(incomingNodes, incomingDeleted);
+            String doc = crdtBuffer.getDocument();
+            int pos = cursorPosition; // Save current cursor position
 
-                // Update the document
-                crdtBuffer.merge(incomingNodes, incomingDeleted);
-                String newContent = crdtBuffer.getDocument();
-                editor.setValue(newContent);
+            editor.setValue(doc);
 
-                // Try to restore cursor position
-                editor.getElement().executeJs(
-                        "this.inputElement.setSelectionRange($0, $0);",
-                        Math.min(cursorPos, newContent.length()));
-            });
-        });
-    }
+            // Restore cursor position (if possible)
+            editor.getElement().executeJs(
+                    "this.inputElement.setSelectionRange($0, $0);",
+                    Math.min(pos, doc.length()));
 
-    // Helper method to get cursor position
-    private int getCursorPosition() {
-        try {
-            // Get selection from the client
-            PendingJavaScriptResult result = editor.getElement()
-                    .executeJs("return this.inputElement.selectionStart;");
-            elemental.json.JsonValue value = result.toCompletableFuture().get(100, TimeUnit.MILLISECONDS);
-            return (int) value.asNumber();
-        } catch (Exception e) {
-            return 0;
-        }
+            // Add this line to update remote cursors after document changes
+            renderRemoteCursors();
+        }));
     }
 
     @Override
@@ -688,19 +707,11 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
 
     @Override
     protected void onDetach(DetachEvent detachEvent) {
-        // First broadcast presence update if in a session
-        if (!sessionCode.isEmpty()) {
-            String baseSessionCode = getBaseSessionCode(sessionCode);
-            Broadcaster.broadcastPresence(userId, userRole, false, baseSessionCode);
-            userRegistry.unregisterUserFromSession(userId, baseSessionCode);
-        }
-
-        // Then handle local cleanup
         Broadcaster.unregister(this);
         userRegistry.unregisterUser(userId);
         userCursors.remove(userId);
-
-        // No need to update panel for this user since they're leaving
+        Broadcaster.broadcastCursor(userId, -1, userColor, sessionCode); // -1 means "gone"
+        updateUserPanel();
     }
 
     // Add ClientCallable method to receive cursor position updates
@@ -715,9 +726,67 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
         }
     }
 
+    @ClientCallable
+    private void updateSelectionState(boolean hasSelection) {
+        System.out.println("Selection state changed: " + hasSelection + ", Role: " + userRole);
+
+        // Always enable the comment button when there's a selection and the user is not a viewer
+        if (commentButton != null) {
+            boolean shouldEnable = hasSelection && !"viewer".equals(userRole);
+            commentButton.setEnabled(shouldEnable);
+            
+            System.out.println("Comment button enabled: " + shouldEnable + 
+                               " (hasSelection=" + hasSelection + 
+                               ", role=" + userRole + ")");
+            
+            // Force UI update
+            getUI().ifPresent(ui -> ui.access(() -> {
+                commentButton.getElement().setProperty("disabled", !shouldEnable);
+                commentButton.getStyle().set("opacity", shouldEnable ? "1" : "0.5");
+                
+                // Visual indicator for debug purposes
+                if (shouldEnable) {
+                    commentButton.getStyle().set("background-color", "#4CAF50");
+                } else {
+                    commentButton.getStyle().set("background-color", "");
+                }
+            }));
+        } else {
+            System.err.println("Comment button is null, cannot update state");
+        }
+    }
+    
     private void initializeSessionComponents() {
         sessionCodeField = new TextField("Session Code");
         joinSessionButton = new Button("Join Session", e -> joinSession());
+    }
+
+    private void initializeCommentComponents() {
+        commentButton = new Button("Add Comment", e -> addComment());
+        commentButton.setEnabled(false);
+        commentButton.setId("comment-button"); // Add an ID for easier reference
+        
+        // Add styles to make the disabled state more visible
+        commentButton.getStyle().set("opacity", "0.5");
+        commentButton.getStyle().set("transition", "opacity 0.3s, background-color 0.3s");
+        
+        // REPLACE the addClickListener with this element event listener
+        editor.getElement().addEventListener("click", e -> {
+            getUI().ifPresent(ui -> ui.access(() -> {
+                // Get current selection state directly
+                PendingJavaScriptResult js = editor.getElement().executeJs(
+                    "return {start: this.inputElement.selectionStart, end: this.inputElement.selectionEnd}");
+                    
+                js.then(JsonObject.class, range -> {
+                    int start = (int) range.getNumber("start");
+                    int end = (int) range.getNumber("end");
+                    boolean hasSelection = start != end;
+                        
+                    // Update button state
+                    updateSelectionState(hasSelection);
+                });
+            }));
+        });
     }
 
     private void joinSession() {
@@ -731,9 +800,6 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
 
             this.sessionCode = code;
             this.userRole = code.endsWith("-view") ? "viewer" : "editor";
-
-            // Switch to the shared buffer for this session
-            this.crdtBuffer = SharedBuffer.getInstance(getBaseSessionCode(code));
 
             // Register with base session code
             String baseSessionCode = getBaseSessionCode(code);
@@ -755,7 +821,6 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
     }
 
     private void addEditorStyles() {
-
         // Add styles to document head with improved cursor visibility
         getElement().executeJs(
                 "const style = document.createElement('style');" +
@@ -771,9 +836,9 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                         "    animation: cursor-pulse 1s infinite ease-in-out;" +
                         "    box-shadow: 0 0 10px currentColor, 0 0 5px currentColor;" + // Enhanced glow for visibility
                         "}" +
-                        ".comment-marker {" +
+                        // Cursor label with user info
+                        ".cursor-label {" +
                         "    position: absolute;" +
-
                         "    top: -24px;" +
                         "    left: -3px;" +
                         "    font-size: 12px;" +
@@ -982,212 +1047,6 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
         });
     }
 
-    private void initializeCommentComponents() {
-        commentButton = new Button("Add Comment", e -> addComment());
-        commentButton.setEnabled(false);
-    }
-
-    private void addComment() {
-        // Get selected text range
-        PendingJavaScriptResult js = editor.getElement().executeJs(
-                "return {start: this.inputElement.selectionStart, end: this.inputElement.selectionEnd}");
-
-        js.then(JsonObject.class, range -> {
-            int start = (int) range.getNumber("start");
-            int end = (int) range.getNumber("end");
-
-            if (start < end) {
-                // Show comment dialog
-                TextField commentField = new TextField("Comment");
-                commentField.setWidth("300px");
-
-                Dialog dialog = new Dialog();
-                dialog.add(new Span("Add comment to selected text:"));
-                dialog.add(commentField);
-
-                Button saveButton = new Button("Save Comment", saveEvent -> {
-                    String commentText = commentField.getValue();
-                    if (!commentText.isEmpty()) {
-                        Comment comment = crdtBuffer.addComment(userId, userColor, commentText, start, end);
-                        Broadcaster.broadcastComment(comment, sessionCode);
-                        renderComments();
-                        dialog.close();
-                    }
-                });
-
-                dialog.add(new HorizontalLayout(saveButton,
-                        new Button("Cancel", cancelEvent -> dialog.close())));
-                dialog.open();
-            }
-        });
-    }
-
-    // Check for text selection to enable/disable comment button
-    private void setupSelectionTracking() {
-        editor.getElement().executeJs(
-                """
-                        (function() {
-                            // Wait for the input element to be initialized
-                            const checkInputElement = () => {
-                                const inputElement = this.querySelector('textarea');
-
-                                if (inputElement) {
-                                    console.log('Input element found!');
-
-                                    function checkSelection() {
-                                        const start = inputElement.selectionStart;
-                                        const end = inputElement.selectionEnd;
-                                        const hasSelection = start !== end;
-
-                                        if (hasSelection) {
-                                            console.log('Selection detected: ' + start + ' to ' + end);
-                                        }
-
-                                        // Use the component's server connection
-                                        this.$server.updateSelectionState(hasSelection);
-                                    }
-
-                                    // Add event listeners to the actual textarea element
-                                    ['mouseup', 'keyup', 'click'].forEach(eventName => {
-                                        inputElement.addEventListener(eventName, () => checkSelection());
-                                    });
-
-                                    // Initial check
-                                    checkSelection();
-                                } else {
-                                    console.log('Input element not found, retrying...');
-                                    setTimeout(checkInputElement, 100); // retry in 100ms
-                                }
-                            };
-
-                            // Start checking for input element
-                            checkInputElement();
-                        })();
-                        """);
-    }
-
-    @ClientCallable
-    private void updateSelectionState(boolean hasSelection) {
-        System.out.println("Selection state changed: " + hasSelection + ", Role: " + userRole);
-
-        // Ensure commentButton exists and userRole is initialized
-        if (commentButton != null && userRole != null) {
-            commentButton.setEnabled(hasSelection && !userRole.equals("viewer"));
-            System.out.println("Comment button enabled: " + commentButton.isEnabled());
-        } else {
-            System.out.println("Button or role not initialized yet");
-        }
-    }
-
-    // Render all comments as markers
-    private void renderComments() {
-        // Remove existing markers
-        commentMarkers.values().forEach(div -> div.getElement().removeFromParent());
-        commentMarkers.clear();
-
-        // Get editor dimensions for positioning
-        PendingJavaScriptResult js = editor.getElement().executeJs("""
-                    return {
-                        rect: this.inputElement.getBoundingClientRect(),
-                        lineHeight: parseInt(window.getComputedStyle(this.inputElement).lineHeight) || 20
-                    }
-                """);
-
-        js.then(JsonObject.class, info -> {
-            JsonObject rect = info.getObject("rect");
-            int lineHeight = (int) info.getNumber("lineHeight");
-            int editorLeft = (int) rect.getNumber("left");
-            int editorTop = (int) rect.getNumber("top");
-
-            // Create marker for each comment
-            for (Comment comment : crdtBuffer.getComments()) {
-                createCommentMarker(comment, editorLeft, editorTop, lineHeight);
-            }
-        });
-    }
-
-    private void createCommentMarker(Comment comment, int editorLeft, int editorTop, int lineHeight) {
-        // Get position coordinates
-        editor.getElement().executeJs("""
-                    (function() {
-                        const ta = this.inputElement;
-                        const text = ta.value;
-                        const pos = $0;
-
-                        // Create a mirror to calculate position
-                        const mirror = document.createElement('div');
-                        mirror.style.position = 'absolute';
-                        mirror.style.top = '0';
-                        mirror.style.left = '0';
-                        mirror.style.visibility = 'hidden';
-                        mirror.style.whiteSpace = 'pre-wrap';
-                        mirror.style.wordWrap = 'break-word';
-                        mirror.style.font = window.getComputedStyle(ta).font;
-                        mirror.style.padding = window.getComputedStyle(ta).padding;
-
-                        // Add content up to position
-                        mirror.textContent = text.substring(0, pos);
-
-                        // Add a marker where comment would be
-                        const span = document.createElement('span');
-                        span.textContent = '.';
-                        mirror.appendChild(span);
-
-                        document.body.appendChild(mirror);
-                        const rect = span.getBoundingClientRect();
-                        document.body.removeChild(mirror);
-
-                        return {
-                            left: rect.left,
-                            top: rect.top
-                        };
-                    })()
-                """, comment.getStartPosition()).then(JsonObject.class, coords -> {
-            int left = (int) coords.getNumber("left");
-            int top = (int) coords.getNumber("top");
-
-            // Create comment marker
-            Div marker = new Div();
-            marker.addClassName("comment-marker");
-            marker.getStyle()
-                    .set("position", "absolute")
-                    .set("left", (left - editorLeft) + "px")
-                    .set("top", (top - editorTop) + "px")
-                    .set("width", "8px")
-                    .set("height", "8px")
-                    .set("border-radius", "50%")
-                    .set("background-color", comment.getAuthorColor())
-                    .set("cursor", "pointer")
-                    .set("z-index", "1000");
-
-            // Add tooltip with comment content
-            marker.getElement().setAttribute("title",
-                    comment.getAuthorId().substring(0, 6) + ": " + comment.getContent());
-
-            // Add click handler to show comment detail
-            marker.addClickListener(e -> {
-                Dialog dialog = new Dialog();
-                dialog.add(new H3("Comment"));
-                dialog.add(new Span("By: " + comment.getAuthorId().substring(0, 6)));
-                dialog.add(new Paragraph(comment.getContent()));
-                dialog.add(new Button("Close", ce -> dialog.close()));
-                dialog.open();
-            });
-
-            // Add to document
-            getElement().appendChild(marker.getElement());
-            commentMarkers.put(comment.getCommentId(), marker);
-        });
-    }
-
-    // Handle receiving comments from other users
-    @Override
-    public void receiveComment(Comment comment) {
-        getUI().ifPresent(ui -> ui.access(() -> {
-            crdtBuffer.addExistingComment(comment); // Use proper method
-            renderComments();
-        }));
-
     private void addCursorStyles() {
         getElement().executeJs(
             "const style = document.createElement('style');" +
@@ -1223,6 +1082,213 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             "`;" +
             "document.head.appendChild(style);"
         );
+    }
 
+    private void setupSelectionTracking() {
+        editor.getElement().executeJs(
+            "(() => {" +
+            "  const element = this;" +
+            "  let lastSelectionState = false;" +
+            "  " +
+            "  function waitForElements() {" +
+            "    if (!element.inputElement) {" +
+            "      console.log('Waiting for input element to initialize...');" +
+            "      setTimeout(waitForElements, 200);" +
+            "      return;" +
+            "    }" +
+            "    " +
+            "    const inputElement = element.inputElement;" +
+            "    console.log('Input element ready for selection tracking');" +
+            "    " +
+            "    // Check selection and notify server if changed" +
+            "    function notifySelectionChange() {" +
+            "      const start = inputElement.selectionStart;" +
+            "      const end = inputElement.selectionEnd;" +
+            "      const hasSelection = start !== end;" +
+            "      " +
+            "      // Only send updates when state changes to avoid flooding" +
+            "      if (hasSelection !== lastSelectionState) {" +
+            "        lastSelectionState = hasSelection;" +
+            "        console.log('Selection changed: ' + (hasSelection ? 'text selected' : 'no selection'));" +
+            "        " +
+            "        // Try to notify server, with retries" +
+            "        function tryNotifyServer(attempts) {" +
+            "          if (attempts <= 0) return;" +
+            "          " +
+            "          if (element.$server) {" +
+            "            try {" +
+            "              element.$server.updateSelectionState(hasSelection);" +
+            "              console.log('Server notified of selection state: ' + hasSelection);" +
+            "            } catch (e) {" +
+            "              console.error('Failed to notify server: ', e);" +
+            "              setTimeout(() => tryNotifyServer(attempts - 1), 100);" +
+            "            }" +
+            "          } else {" +
+            "            console.log('Server not available, retrying in 200ms...');" +
+            "            setTimeout(() => tryNotifyServer(attempts - 1), 200);" +
+            "          }" +
+            "        }" +
+            "        " +
+            "        // Try with 5 attempts" +
+            "        tryNotifyServer(5);" +
+            "      }" +
+            "    }" +
+            "    " +
+            "    // Direct event handlers for selection changes" +
+            "    ['mouseup', 'keyup', 'selectionchange'].forEach(eventType => {" +
+            "      inputElement.addEventListener(eventType, () => {" +
+            "        notifySelectionChange();" +
+            "      });" +
+            "    });" +
+            "    " +
+            "    // For browsers that support the selectionchange event at document level" +
+            "    document.addEventListener('selectionchange', () => {" +
+            "      if (document.activeElement === inputElement) {" +
+            "        notifySelectionChange();" +
+            "      }" +
+            "    });" +
+            "    " +
+            "    // Also run selection check on mouse down/up" +
+            "    inputElement.addEventListener('mousedown', () => {" +
+            "      // Check after a small delay to allow selection to complete" +
+            "      setTimeout(notifySelectionChange, 10);" +
+            "    });" +
+            "    " +
+            "    // Initial check and periodic checks" +
+            "    setTimeout(notifySelectionChange, 500);" +
+            "    setInterval(notifySelectionChange, 1000); // Backup check every second" +
+            "  }" +
+            "  " +
+            "  // Start watching" +
+            "  waitForElements();" +
+            "})();"
+        );
+    }
+
+    private void addComment() {
+        // Define the js variable first
+        PendingJavaScriptResult js = editor.getElement().executeJs(
+            "return {start: this.inputElement.selectionStart, end: this.inputElement.selectionEnd}");
+        
+        // Then use it
+        js.then(JsonObject.class, range -> {
+            int start = (int) range.getNumber("start");
+            int end = (int) range.getNumber("end");
+
+            if (start < end) {
+                // Show comment dialog
+                TextField commentField = new TextField("Comment");
+                commentField.setWidth("300px");
+
+                Dialog dialog = new Dialog();
+                dialog.add(new Span("Add comment to selected text:"));
+                dialog.add(commentField);
+
+                Button saveButton = new Button("Save Comment", saveEvent -> {
+                    String commentText = commentField.getValue();
+                    if (!commentText.isEmpty()) {
+                        Comment comment = crdtBuffer.addComment(userId, userColor, commentText, start, end);
+                        Broadcaster.broadcastComment(comment, sessionCode);
+                        updateCommentsPanel();
+                        dialog.close();
+                    }
+                });
+
+                dialog.add(new HorizontalLayout(saveButton,
+                        new Button("Cancel", cancelEvent -> dialog.close())));
+                dialog.open();
+            }
+        });
+    }
+
+    @Override
+    public void receiveComment(Comment comment) {
+        getUI().ifPresent(ui -> ui.access(() -> {
+            crdtBuffer.addExistingComment(comment);
+            updateCommentsPanel();
+        }));
+    }
+
+    @Override
+    public void receiveCommentRemoval(String commentId) {
+        getUI().ifPresent(ui -> ui.access(() -> {
+            crdtBuffer.removeComment(commentId);
+            updateCommentsPanel();
+        }));
+    }
+
+    private void updateCommentsPanel() {
+        // Clear all existing comments from the UI panel
+        commentsPanel.removeAll();
+        commentsPanel.add(new H3("Comments (" + crdtBuffer.getComments().size() + ")"));
+        
+        // Get all comments and sort them by position in the document
+        List<Comment> sortedComments = new ArrayList<>(crdtBuffer.getComments());
+        sortedComments.sort(Comparator.comparingInt(Comment::getStartPosition));
+        
+        // Add each comment to the panel
+        for (Comment comment : sortedComments) {
+            // Create a card for each comment
+            Div card = new Div();
+            card.getStyle()
+                .set("background-color", "white")
+                .set("border-radius", "4px")
+                .set("padding", "10px")
+                .set("margin-bottom", "10px")
+                .set("box-shadow", "0 1px 3px rgba(0,0,0,0.1)")
+                .set("border-left", "4px solid " + comment.getAuthorColor());
+            
+            // Author info
+            Span author = new Span(comment.getAuthorId().substring(0, 6));
+            author.getStyle()
+                .set("font-weight", "bold")
+                .set("color", comment.getAuthorColor());
+            
+            // Comment text
+            Paragraph content = new Paragraph(comment.getContent());
+            content.getStyle().set("margin", "5px 0");
+            
+            // Commented text preview
+            String documentText = crdtBuffer.getDocument();
+            String commentedText = "";
+            int start = comment.getStartPosition();
+            int end = comment.getEndPosition();
+            if (start >= 0 && end <= documentText.length() && start < end) {
+                commentedText = documentText.substring(start, end);
+            }
+            
+            Div textPreview = new Div();
+            textPreview.getStyle()
+                .set("background-color", "#f0f0f0")
+                .set("padding", "5px")
+                .set("border-radius", "3px")
+                .set("margin", "5px 0")
+                .set("font-family", "monospace")
+                .set("overflow", "hidden")
+                .set("text-overflow", "ellipsis");
+            textPreview.setText("\"" + commentedText + "\"");
+            
+            // Jump to comment button
+            Button jumpButton = new Button("Jump to", e -> {
+                editor.focus();
+                // Select the commented text
+                editor.getElement().executeJs(
+                    "this.inputElement.setSelectionRange($0, $1); this.inputElement.focus();",
+                    comment.getStartPosition(), comment.getEndPosition()
+                );
+            });
+            jumpButton.getStyle().set("margin-top", "5px");
+            
+            // Add all components to the card
+            card.add(author, content, textPreview, jumpButton);
+            commentsPanel.add(card);
+        }
+        
+        // Add a message if there are no comments
+        if (sortedComments.isEmpty()) {
+            Span noComments = new Span("No comments yet. Select text and use the Comment button to add comments.");
+            noComments.getStyle().set("font-style", "italic");
+            commentsPanel.add(noComments);
+        }
     }
 }

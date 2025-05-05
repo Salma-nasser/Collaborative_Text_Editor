@@ -25,6 +25,8 @@ public class Broadcaster {
 
         void receiveComment(Comment comment);
 
+        void receiveCommentRemoval(String commentId);
+
         String getUserId();
 
         String getSessionCode();
@@ -94,6 +96,22 @@ public class Broadcaster {
         for (BroadcastListener listener : listeners) {
             if (baseSessionCode.equals(getBaseSessionCode(listener.getSessionCode()))) {
                 executor.execute(() -> listener.receiveComment(comment));
+            }
+        }
+    }
+
+    /**
+     * Broadcast removal of a comment to all listeners in the same session
+     * 
+     * @param commentId the ID of the comment to remove
+     * @param sessionCode the session code
+     */
+    public static void broadcastCommentRemoval(String commentId, String sessionCode) {
+        for (BroadcastListener listener : listeners) {
+            if (listener.getSessionCode().equals(sessionCode) || 
+                listener.getSessionCode().equals(sessionCode + "-view") ||
+                listener.getSessionCode().equals(sessionCode + "-edit")) {
+                listener.receiveCommentRemoval(commentId);
             }
         }
     }

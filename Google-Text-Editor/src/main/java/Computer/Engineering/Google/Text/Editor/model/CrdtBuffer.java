@@ -1,6 +1,7 @@
 package Computer.Engineering.Google.Text.Editor.model;
 
 import java.util.*;
+import java.util.Iterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.util.stream.Collectors;
@@ -355,5 +356,23 @@ public class CrdtBuffer {
         if (comments.stream().noneMatch(c -> c.getCommentId().equals(comment.getCommentId()))) {
             comments.add(comment);
         }
+    }
+
+    /**
+     * Removes a comment with the specified ID from the buffer
+     * 
+     * @param commentId The ID of the comment to remove
+     * @return true if the comment was found and removed, false otherwise
+     */
+    public boolean removeComment(String commentId) {
+        // Use Iterator to safely remove while iterating
+        for (Iterator<Comment> iterator = comments.iterator(); iterator.hasNext();) {
+            Comment comment = iterator.next();
+            if (comment.getCommentId().equals(commentId)) {
+                iterator.remove();
+                return true;
+            }
+        }
+        return false;
     }
 }
