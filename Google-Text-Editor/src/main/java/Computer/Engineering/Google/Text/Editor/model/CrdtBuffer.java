@@ -9,6 +9,7 @@ public class CrdtBuffer {
     private String siteId;
     private int clock;
     private Set<String> deletedSet;
+    private List<CrdtNode> deletedNodes = new ArrayList<>();
     Logger logger = LoggerFactory.getLogger(CrdtBuffer.class);
 
     public CrdtBuffer(String siteId) {
@@ -81,45 +82,66 @@ public class CrdtBuffer {
     }
 
     public String getDocument() {
-        StringBuilder doc = new StringBuilder();
+        // Build the tree structure
         Map<String, List<CrdtNode>> childrenMap = new HashMap<>();
-
-        // Group nodes by parentId
         for (CrdtNode node : nodes) {
             if (!node.isDeleted()) {
                 childrenMap.computeIfAbsent(node.getParentId(), k -> new ArrayList<>()).add(node);
             }
         }
 
+        // Sort children using the natural ordering defined in CrdtNode.compareTo
+        for (List<CrdtNode> children : childrenMap.values()) {
+            Collections.sort(children); // This will use the compareTo method
+        }
+
+        // Debug visualization (keep this for debugging)
         System.out.println("\n===== DOCUMENT TREE STRUCTURE =====");
         System.out.println("Root node: 0");
-        // Recursively append children in CRDT order
-        buildDocument("0", childrenMap, doc, "", 0);
+        buildDocumentWithVisualization("0", childrenMap, new StringBuilder(), "", 0);
         System.out.println("==================================\n");
 
+        // Build document with direct traversal
+        StringBuilder doc = new StringBuilder();
+        buildDocumentDirect("0", childrenMap, doc);
         return doc.toString();
     }
 
-    private void buildDocument(String parentId, Map<String, List<CrdtNode>> childrenMap,
-            StringBuilder doc, String indent, int depth) {
-        List<CrdtNode> children = childrenMap.get(parentId);
+    // Direct document building with proper traversal
+    private void buildDocumentDirect(String nodeId, Map<String, List<CrdtNode>> childrenMap, StringBuilder sb) {
+        List<CrdtNode> children = childrenMap.get(nodeId);
         if (children == null)
             return;
 
-        // Sort using your CRDT's compareTo
-        children.sort(CrdtNode::compareTo);
+        for (CrdtNode child : children) {
+            sb.append(child.getCharValue());
+            buildDocumentDirect(child.getUniqueId(), childrenMap, sb);
+        }
+    }
 
-        for (CrdtNode node : children) {
-            // Print node info with tree visualization
-            String nodeInfo = String.format("%s├─ '%c' (ID: %s, Parent: %s, Counter: %d, Depth: %d)",
-                    indent, node.getCharValue(), node.getUniqueId(),
-                    parentId, node.getCounter(), depth);
-            System.out.println(nodeInfo);
+    // Enhanced buildDocument method with tree visualization
+    private void buildDocumentWithVisualization(String nodeId, Map<String, List<CrdtNode>> childrenMap,
+            StringBuilder document, String prefix, int depth) {
+        List<CrdtNode> children = childrenMap.get(nodeId);
+        if (children == null)
+            return;
 
-            doc.append(node.getCharValue());
+        for (int i = 0; i < children.size(); i++) {
+            CrdtNode node = children.get(i);
+            boolean isLastChild = (i == children.size() - 1);
 
-            // Recursively process children
-            buildDocument(node.getUniqueId(), childrenMap, doc, indent + "│  ", depth + 1);
+            // Add the character to the document
+            document.append(node.getCharValue());
+
+            // Print tree visualization
+            String childPrefix = prefix + (isLastChild ? "   " : "│  ");
+            String nodeConnector = isLastChild ? "└─ " : "├─ ";
+            System.out.println(prefix + nodeConnector + "'" + node.getCharValue() + "' (ID: " +
+                    node.getUniqueId() + ", Parent: " + node.getParentId() +
+                    ", Counter: " + node.getCounter() + ", Depth: " + depth + ")");
+
+            // Process children of this node
+            buildDocumentWithVisualization(node.getUniqueId(), childrenMap, document, childPrefix, depth + 1);
         }
     }
 
@@ -149,12 +171,11 @@ public class CrdtBuffer {
         if (children == null)
             return;
 
-        // Sort using the same ordering as document building
-        children.sort(CrdtNode::compareTo);
+        // Use the same natural ordering as in getDocument
+        Collections.sort(children); // This will use the compareTo method
 
         for (CrdtNode node : children) {
             result.add(node.getUniqueId());
-            // Recursively add children's IDs
             buildNodeIdList(node.getUniqueId(), childrenMap, result);
         }
     }
@@ -168,13 +189,33 @@ public class CrdtBuffer {
     }
 
     public void delete(String siteId, int clock) {
+        CrdtNode nodeToDelete = null;
         for (CrdtNode node : nodes) {
             if (node.getSiteId().equals(siteId) && node.getClock() == clock) {
-                node.markDeleted();
-                deletedSet.add(node.getUniqueId()); // Track deletions properly
-                logger.debug("Deleted node: " + node.getUniqueId());
+                nodeToDelete = node;
                 break;
             }
+        }
+
+        if (nodeToDelete != null) {
+            // Get the parent ID before setting deleted flag
+            String parentId = nodeToDelete.getParentId();
+
+            // Mark this node as deleted
+            nodeToDelete.setDeleted(true);
+            deletedNodes.add(nodeToDelete);
+
+            // Important: Find all children of this node and reassign their parent
+            for (CrdtNode node : nodes) {
+                if (node.getParentId().equals(nodeToDelete.getUniqueId())) {
+                    // Reassign the parent to be the deleted node's parent
+                    node.setParentId(parentId);
+                    logger.debug("Reassigned node " + node.getCharValue() +
+                            " from parent " + nodeToDelete.getUniqueId() + " to " + parentId);
+                }
+            }
+
+            logger.debug("Deleted node: " + nodeToDelete.getUniqueId());
         }
     }
 
