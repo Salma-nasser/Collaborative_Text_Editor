@@ -217,76 +217,69 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             if (!event.isFromClient())
                 return;
 
-            String newText = event.getValue();
-            String oldText = crdtBuffer.getDocument();
-
-            System.out.println("Value change event - cursor at: " + cursorPosition);
-            System.out.println("Old text: '" + oldText + "'");
-            System.out.println("New text: '" + newText + "'");
-
-            int oldLen = oldText.length();
-            int newLen = newText.length();
-
-            int start = 0;
-            while (start < Math.min(oldLen, newLen) && oldText.charAt(start) == newText.charAt(start)) {
-                start++;
-            }
-
-            int endOld = oldLen - 1;
-            int endNew = newLen - 1;
-            while (endOld >= start && endNew >= start && oldText.charAt(endOld) == newText.charAt(endNew)) {
-                endOld--;
-                endNew--;
-            }
-
-            System.out.println("Diffing results - start: " + start + ", endOld: " + endOld + ", endNew: " + endNew);
-
-            // Create final copies of variables for use in lambdas
-            final int finalStart = start;
-            final int finalEndOld = endOld;
-            final int finalEndNew = endNew;
-            final boolean hasDeletions = finalEndOld >= finalStart;
-            final boolean hasInsertions = finalStart <= finalEndNew;
+            // Get current cursor position before any modification
+            PendingJavaScriptResult currentPosResult = editor.getElement().executeJs(
+                "return this.inputElement.selectionStart;"
+            );
             
-            // Track if we need to broadcast changes at the end
-            final boolean[] needsBroadcast = {false};
+            currentPosResult.then(Integer.class, currentPos -> {
+                String newText = event.getValue();
+                String oldText = crdtBuffer.getDocument();
 
-            // Improved deletion logic
-            if (hasDeletions) {
-                System.out.println("Deleting characters from position " + finalStart + " to " + finalEndOld);
-                
-                // Process deletions and comments synchronously, since we don't need browser info
-                processDeletedContent(finalStart, finalEndOld);
-                needsBroadcast[0] = true;
-            }
+                System.out.println("Value change event - cursor at: " + currentPos);
+                System.out.println("Old text: '" + oldText + "'");
+                System.out.println("New text: '" + newText + "'");
 
-            // If there are insertions
-            if (hasInsertions) {
-                // Use the actual cursor position to determine the parent node
-                // Get the actual cursor position from the browser, not the inferred insertion point
-                PendingJavaScriptResult posResult = editor.getElement().executeJs(
-                    "return this.inputElement.selectionStart;"
-                );
+                int oldLen = oldText.length();
+                int newLen = newText.length();
+
+                int start = 0;
+                while (start < Math.min(oldLen, newLen) && oldText.charAt(start) == newText.charAt(start)) {
+                    start++;
+                }
+
+                int endOld = oldLen - 1;
+                int endNew = newLen - 1;
+                while (endOld >= start && endNew >= start && oldText.charAt(endOld) == newText.charAt(endNew)) {
+                    endOld--;
+                    endNew--;
+                }
+
+                System.out.println("Diffing results - start: " + start + ", endOld: " + endOld + ", endNew: " + endNew);
+
+                // Create final copies of variables for use in lambdas
+                final int finalStart = start;
+                final int finalEndOld = endOld;
+                final int finalEndNew = endNew;
+                final boolean hasDeletions = finalEndOld >= finalStart;
+                final boolean hasInsertions = finalStart <= finalEndNew;
+                final int finalCursorPos = currentPos;
                 
-                posResult.then(Integer.class, actualPos -> {
-                    System.out.println("Actual cursor position: " + actualPos);
-                    
+                // Track if we need to broadcast changes at the end
+                final boolean[] needsBroadcast = {false};
+
+                // Process all changes at once instead of separately
+                if (hasDeletions) {
+                    System.out.println("Deleting characters from position " + finalStart + " to " + finalEndOld);
+                    processDeletedContent(finalStart, finalEndOld);
+                    needsBroadcast[0] = true;
+                }
+
+                if (hasInsertions) {
                     // Calculate the parent node id for insertion
-                    int insertPos = Math.min(finalStart, actualPos);
                     String baseParentId;
                     
-                    if (insertPos == 0) {
+                    if (finalStart == 0) {
                         baseParentId = "0"; // Root node
                         System.out.println("Using ROOT node as parent for first character insertion");
                     } else {
                         // Get the node right before the insertion point
-                        baseParentId = crdtBuffer.getNodeIdAtPosition(insertPos - 1);
-                        System.out.println("Using base parent ID: " + baseParentId + " for insertion at pos: " + insertPos);
+                        baseParentId = crdtBuffer.getNodeIdAtPosition(finalStart - 1);
+                        System.out.println("Using base parent ID: " + baseParentId + " for insertion at pos: " + finalStart);
                     }
                     
                     // Use a temporary local variable to track parent ID through the closure
                     final String[] currentParentId = {baseParentId};
-                    final String finalNewText = newText;
                     
                     // Special case for the very first character in the document
                     if (oldText.isEmpty() && !newText.isEmpty()) {
@@ -298,7 +291,7 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                     // Insert each character with the correct parent ID chain
                     for (int i = finalStart; i <= finalEndNew; i++) {
                         final int index = i; // To use in lambda
-                        char c = finalNewText.charAt(i);
+                        char c = newText.charAt(i);
                         
                         // Debug the current operation
                         System.out.println("Inserting '" + c + "' with parent ID: " + currentParentId[0] + 
@@ -307,27 +300,35 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                         // Important: Insert synchronously to maintain order
                         String newNodeId = crdtBuffer.insertAndReturnId(c, currentParentId[0]);
                         currentParentId[0] = newNodeId; // Update parent for next character
-                        
-                        System.out.println("Inserted '" + c + "' with parent: " + 
-                                          (index == finalStart ? baseParentId : "previous node") + 
-                                          ", new node ID: " + newNodeId);
                     }
                     
+                    needsBroadcast[0] = true;
+                }
+                
+                if (needsBroadcast[0]) {
                     // Only broadcast once at the end of all operations
                     Broadcaster.broadcast(
                         new ArrayList<>(crdtBuffer.getAllNodes()),
                         new ArrayList<>(crdtBuffer.getDeletedNodes()), sessionCode);
                         
                     // Debug: print the resulting document and CRDT tree
-                    System.out.println("Final document after insertions: '" + crdtBuffer.getDocument() + "'");
-                    crdtBuffer.printBuffer();
-                });
-            } else if (needsBroadcast[0]) {
-                // Only broadcast here if we had deletions but no insertions
-                Broadcaster.broadcast(
-                    new ArrayList<>(crdtBuffer.getAllNodes()),
-                    new ArrayList<>(crdtBuffer.getDeletedNodes()), sessionCode);
-            }
+                    System.out.println("Final document after operations: '" + crdtBuffer.getDocument() + "'");
+                }
+                
+                // IMPORTANT: Restore cursor position after all operations
+                int adjustedCursorPos = finalCursorPos;
+                if (hasDeletions && !hasInsertions) {
+                    // When just deleting, maintain position at the start of the deletion
+                    adjustedCursorPos = finalStart;
+                }
+                    
+                // Set the cursor position to its original location or the adjusted position
+                editor.getElement().executeJs(
+                    "this.inputElement.setSelectionRange($0, $0);",
+                    adjustedCursorPos
+                );
+                cursorPosition = adjustedCursorPos;
+            });
         });
 
         // Add this after creating the editor in your constructor
@@ -744,10 +745,13 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
 
     @Override
     protected void onDetach(DetachEvent detachEvent) {
+        // Broadcast departure before unregistering
+        if (!sessionCode.isEmpty()) {
+            Broadcaster.broadcastPresence(userId, userRole, false, sessionCode);
+        }
         Broadcaster.unregister(this);
         userRegistry.unregisterUser(userId);
         userCursors.remove(userId);
-        Broadcaster.broadcastCursor(userId, -1, userColor, sessionCode); // -1 means "gone"
         updateUserPanel();
     }
 
@@ -773,8 +777,8 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             commentButton.setEnabled(shouldEnable);
             
             System.out.println("Comment button enabled: " + shouldEnable + 
-                               " (hasSelection=" + hasSelection + 
-                               ", role=" + userRole + ")");
+                            " (hasSelection=" + hasSelection + 
+                            ", role=" + userRole + ")");
             
             // Force UI update
             getUI().ifPresent(ui -> ui.access(() -> {
