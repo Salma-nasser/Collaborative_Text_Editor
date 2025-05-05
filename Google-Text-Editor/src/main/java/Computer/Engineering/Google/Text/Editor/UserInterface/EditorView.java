@@ -245,57 +245,23 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             final int finalStart = start;
             final int finalEndOld = endOld;
             final int finalEndNew = endNew;
+            final boolean hasDeletions = finalEndOld >= finalStart;
+            final boolean hasInsertions = finalStart <= finalEndNew;
+            
+            // Track if we need to broadcast changes at the end
+            final boolean[] needsBroadcast = {false};
 
             // Improved deletion logic
-            if (finalEndOld >= finalStart) {
+            if (hasDeletions) {
                 System.out.println("Deleting characters from position " + finalStart + " to " + finalEndOld);
                 
-                // First, identify all specific nodes that need deletion
-                List<String> nodesToDelete = new ArrayList<>();
-                for (int pos = finalStart; pos <= finalEndOld; pos++) {
-                    String nodeId = crdtBuffer.getNodeIdAtPosition(pos);
-                    if (!nodeId.equals("0")) {
-                        nodesToDelete.add(nodeId);
-                        System.out.println("Marking node for deletion: " + nodeId + " at position " + pos);
-                    }
-                }
-                
-                // Check for comments that should be deleted
-                List<Comment> commentsToDelete = new ArrayList<>();
-                for (Comment comment : crdtBuffer.getComments()) {
-                    // If the comment's entire text range is within the deleted range, or if the
-                    // comment start is in the deletion range, mark it for removal
-                    if ((comment.getStartPosition() >= finalStart && comment.getEndPosition() <= finalEndOld) ||
-                        (comment.getStartPosition() >= finalStart && comment.getStartPosition() <= finalEndOld)) {
-                        commentsToDelete.add(comment);
-                        System.out.println("Marking comment for deletion: " + comment.getCommentId() + " at position " + 
-                                        comment.getStartPosition() + "-" + comment.getEndPosition());
-                    }
-                }
-                
-                // Then delete nodes one by one
-                for (String nodeId : nodesToDelete) {
-                    String[] parts = nodeId.split("-");
-                    System.out.println("Deleting node: " + nodeId);
-                    crdtBuffer.delete(parts[0], Integer.parseInt(parts[1]));
-                }
-                
-                // Delete the affected comments
-                for (Comment comment : commentsToDelete) {
-                    crdtBuffer.removeComment(comment.getCommentId());
-                    // Notify others that the comment has been removed
-                    Broadcaster.broadcastCommentRemoval(comment.getCommentId(), sessionCode);
-                    System.out.println("Deleted comment: " + comment.getCommentId());
-                }
-                
-                // Update the comments panel if any comments were deleted
-                if (!commentsToDelete.isEmpty()) {
-                    updateCommentsPanel();
-                }
+                // Process deletions and comments synchronously, since we don't need browser info
+                processDeletedContent(finalStart, finalEndOld);
+                needsBroadcast[0] = true;
             }
 
             // If there are insertions
-            if (finalStart <= finalEndNew) {
+            if (hasInsertions) {
                 // Use the actual cursor position to determine the parent node
                 // Get the actual cursor position from the browser, not the inferred insertion point
                 PendingJavaScriptResult posResult = editor.getElement().executeJs(
@@ -311,20 +277,32 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                     
                     if (insertPos == 0) {
                         baseParentId = "0"; // Root node
+                        System.out.println("Using ROOT node as parent for first character insertion");
                     } else {
                         // Get the node right before the insertion point
                         baseParentId = crdtBuffer.getNodeIdAtPosition(insertPos - 1);
-                        System.out.println("Using base parent ID: " + baseParentId + " for insertion");
+                        System.out.println("Using base parent ID: " + baseParentId + " for insertion at pos: " + insertPos);
                     }
                     
                     // Use a temporary local variable to track parent ID through the closure
                     final String[] currentParentId = {baseParentId};
                     final String finalNewText = newText;
                     
+                    // Special case for the very first character in the document
+                    if (oldText.isEmpty() && !newText.isEmpty()) {
+                        System.out.println("First character in document, using ROOT as parent");
+                        baseParentId = "0";
+                        currentParentId[0] = "0";
+                    }
+                    
                     // Insert each character with the correct parent ID chain
                     for (int i = finalStart; i <= finalEndNew; i++) {
                         final int index = i; // To use in lambda
                         char c = finalNewText.charAt(i);
+                        
+                        // Debug the current operation
+                        System.out.println("Inserting '" + c + "' with parent ID: " + currentParentId[0] + 
+                                           " at logical position: " + i);
                         
                         // Important: Insert synchronously to maintain order
                         String newNodeId = crdtBuffer.insertAndReturnId(c, currentParentId[0]);
@@ -335,20 +313,21 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                                           ", new node ID: " + newNodeId);
                     }
                     
-                    // Broadcast the changes immediately
+                    // Only broadcast once at the end of all operations
                     Broadcaster.broadcast(
                         new ArrayList<>(crdtBuffer.getAllNodes()),
                         new ArrayList<>(crdtBuffer.getDeletedNodes()), sessionCode);
+                        
+                    // Debug: print the resulting document and CRDT tree
+                    System.out.println("Final document after insertions: '" + crdtBuffer.getDocument() + "'");
+                    crdtBuffer.printBuffer();
                 });
-            }
-
-            Broadcaster.broadcast(
+            } else if (needsBroadcast[0]) {
+                // Only broadcast here if we had deletions but no insertions
+                Broadcaster.broadcast(
                     new ArrayList<>(crdtBuffer.getAllNodes()),
                     new ArrayList<>(crdtBuffer.getDeletedNodes()), sessionCode);
-
-            // Debug: print the resulting document and CRDT tree
-            System.out.println("Final document: '" + crdtBuffer.getDocument() + "'");
-            crdtBuffer.printBuffer();
+            }
         });
 
         // Add this after creating the editor in your constructor
@@ -1347,6 +1326,53 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             Span noComments = new Span("No comments yet. Select text and use the Comment button to add comments.");
             noComments.getStyle().set("font-style", "italic");
             commentsPanel.add(noComments);
+        }
+    }
+
+    // Added helper method to process deleted content
+    private void processDeletedContent(int start, int endOld) {
+        // First, identify all specific nodes that need deletion
+        List<String> nodesToDelete = new ArrayList<>();
+        for (int pos = start; pos <= endOld; pos++) {
+            String nodeId = crdtBuffer.getNodeIdAtPosition(pos);
+            if (!nodeId.equals("0")) {
+                nodesToDelete.add(nodeId);
+                System.out.println("Marking node for deletion: " + nodeId + " at position " + pos);
+            }
+        }
+        
+        // Check for comments that should be deleted
+        List<Comment> commentsToDelete = new ArrayList<>();
+        for (Comment comment : crdtBuffer.getComments()) {
+            // If the comment's entire text range is within the deleted range, or if the
+            // comment start is in the deletion range, mark it for removal
+            if ((comment.getStartPosition() >= start && comment.getEndPosition() <= endOld) ||
+                (comment.getStartPosition() >= start && comment.getStartPosition() <= endOld)) {
+                commentsToDelete.add(comment);
+                System.out.println("Marking comment for deletion: " + comment.getCommentId() + 
+                                   " at position " + comment.getStartPosition() + "-" + 
+                                   comment.getEndPosition());
+            }
+        }
+        
+        // Then delete nodes one by one
+        for (String nodeId : nodesToDelete) {
+            String[] parts = nodeId.split("-");
+            System.out.println("Deleting node: " + nodeId);
+            crdtBuffer.delete(parts[0], Integer.parseInt(parts[1]));
+        }
+        
+        // Delete the affected comments
+        for (Comment comment : commentsToDelete) {
+            crdtBuffer.removeComment(comment.getCommentId());
+            // Notify others that the comment has been removed
+            Broadcaster.broadcastCommentRemoval(comment.getCommentId(), sessionCode);
+            System.out.println("Deleted comment: " + comment.getCommentId());
+        }
+        
+        // Update the comments panel if any comments were deleted
+        if (!commentsToDelete.isEmpty()) {
+            updateCommentsPanel();
         }
     }
 }
