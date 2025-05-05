@@ -3,6 +3,8 @@ import '@vaadin/polymer-legacy-adapter/style-modules.js';
 import '@vaadin/upload/src/vaadin-upload.js';
 import '@vaadin/text-field/src/vaadin-text-field.js';
 import '@vaadin/horizontal-layout/src/vaadin-horizontal-layout.js';
+import '@vaadin/dialog/src/vaadin-dialog.js';
+import 'Frontend/generated/jar-resources/flow-component-renderer.js';
 import '@vaadin/button/src/vaadin-button.js';
 import 'Frontend/generated/jar-resources/buttonFunctions.js';
 import '@vaadin/text-area/src/vaadin-text-area.js';
