@@ -1,0 +1,40 @@
+@keyframes cursor-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+.cursor-container {
+    position: absolute;
+    z-index: 1000;
+    pointer-events: none;
+}
+
+.cursor-line {
+    position: absolute;
+    width: 4px;
+    height: 20px;
+    border-radius: 2px;
+    animation: cursor-blink 1s infinite;
+}
+
+.remote-cursor {
+    position: absolute;
+    width: 4px;
+    height: 20px;
+    z-index: 9999;
+    pointer-events: none;
+    animation: cursor-blink 1s infinite;
+}
+
+.cursor-label {
+    position: absolute;
+    top: -20px;
+    left: -2px;
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: bold;
+    white-space: nowrap;
+    z-index: 10000;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}

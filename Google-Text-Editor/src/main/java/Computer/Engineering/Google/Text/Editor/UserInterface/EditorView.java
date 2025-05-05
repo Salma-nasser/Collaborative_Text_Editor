@@ -42,8 +42,17 @@ import java.io.ByteArrayInputStream;
 
 import com.vaadin.flow.server.StreamResource;
 import com.vaadin.flow.component.ClientCallable;
+import com.vaadin.flow.dom.Element;
+import com.vaadin.flow.component.dependency.StyleSheet;
+import com.vaadin.flow.component.UI;
+import com.vaadin.flow.component.html.Div;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.HashSet;
+import elemental.json.JsonObject;
+import elemental.json.JsonValue;
 
 @Route("")
+@StyleSheet("context://styles/cursor-styles.css")
 public class EditorView extends VerticalLayout implements Broadcaster.BroadcastListener {
 
     // Don't initialize with the shared instance immediately
@@ -61,6 +70,8 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
     private Button joinSessionButton;
     private String userRole = "editor";
     private final Map<String, String> userRoles = new HashMap<>();
+    private final Map<String, CursorOverlay> cursorOverlays = new ConcurrentHashMap<>();
+    private final Div cursorContainer = new Div();
 
     private Button commentButton;
     private final Map<String, Div> commentMarkers = new HashMap<>();
@@ -302,6 +313,29 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
         setupEnhancedCursorTracking();
         schedulePeriodicCursorUpdates();
         setupSelectionTracking();
+
+        editor.getElement().getParent().appendChild(cursorContainer.getElement());
+        cursorContainer.getStyle()
+                .set("position", "absolute")
+                .set("top", "0")
+                .set("left", "0")
+                .set("right", "0")
+                .set("bottom", "0")
+                .set("pointer-events", "none")
+                .set("z-index", "1000");
+
+        addCursorStyles();
+
+        editor.addAttachListener(event -> {
+            // Ensure cursor tracking is initialized after the component is attached
+            getUI().ifPresent(ui -> ui.access(() -> {
+                ui.getPage().executeJs(
+                    "console.log('Editor attached, initializing cursors...');"
+                );
+                setupEnhancedCursorTracking();
+                addCursorStyles();
+            }));
+        });
     }
 
     private void updateUserPanel() {
@@ -340,114 +374,167 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
 
     private void renderRemoteCursors() {
         getUI().ifPresent(ui -> ui.access(() -> {
-            // Remove all existing cursors first
+            System.out.println("Rendering remote cursors. Active users: " + userCursors.size());
+            
+            // Using a self-contained approach that doesn't rely on external function definitions
             editor.getElement().executeJs(
-                    "Array.from(document.querySelectorAll('.remote-cursor')).forEach(e => e.remove());");
-
+                // Define the cursor creation function and immediately execute it for each cursor
+                "(() => {" +
+                    // First clean up any old cursors
+                    "document.querySelectorAll('.remote-cursor').forEach(el => el.remove());" +
+                    
+                    // Function to safely create a cursor (defined inside the IIFE)
+                    "function createCursorElement(userId, position, color, name, role) {" +
+                        "try {" +
+                            "const ta = document.querySelector('vaadin-text-area').inputElement;" +
+                            "if (!ta) return false;" +
+                            
+                            // Create cursor element
+                            "const cursor = document.createElement('div');" +
+                            "cursor.className = 'remote-cursor';" +
+                            "cursor.id = 'cursor-' + userId;" +
+                            "cursor.style.position = 'absolute';" +
+                            "cursor.style.backgroundColor = color;" +
+                            "cursor.style.width = '4px';" +
+                            "cursor.style.height = '20px';" +
+                            "cursor.style.zIndex = '9999';" +
+                            "cursor.style.pointerEvents = 'none';" +
+                            
+                            // Add user label
+                            "const label = document.createElement('div');" +
+                            "label.className = 'cursor-label';" +
+                            "label.style.backgroundColor = color;" +
+                            "label.style.color = 'white';" +
+                            "label.style.padding = '2px 5px';" +
+                            "label.style.borderRadius = '3px';" +
+                            "label.style.position = 'absolute';" +
+                            "label.style.top = '-20px';" +
+                            "label.style.left = '-2px';" +
+                            "label.textContent = name + ' (' + role + ')';" +
+                            "cursor.appendChild(label);" +
+                            
+                            // Calculate position
+                            "const rect = ta.getBoundingClientRect();" +
+                            "const doc = ta.value.substring(0, position);" +
+                            "const lines = doc.split('\\n');" +
+                            "const lineIdx = lines.length - 1;" +
+                            "const lineText = lines[lineIdx];" +
+                            "const charWidth = 8;" + 
+                            "const lineHeight = 20;" +
+                            
+                            "const xPos = lineText.length * charWidth + 4;" +
+                            "const yPos = lineIdx * lineHeight + 4;" +
+                            
+                            "cursor.style.left = xPos + 'px';" +
+                            "cursor.style.top = yPos + 'px';" +
+                            
+                            // Add to DOM - directly to document body for better visibility
+                            "document.body.appendChild(cursor);" +
+                            
+                            // Position relative to textarea
+                            "const taRect = ta.getBoundingClientRect();" +
+                            "cursor.style.position = 'fixed';" +
+                            "cursor.style.left = (taRect.left + xPos) + 'px';" +
+                            "cursor.style.top = (taRect.top + yPos) + 'px';" +
+                            
+                            // Add animation
+                            "cursor.animate([" +
+                                "{opacity: 1}, {opacity: 0.5}, {opacity: 1}" +
+                            "], {" +
+                                "duration: 1500, iterations: Infinity" +
+                            "});" +
+                            
+                            "console.log('Created cursor for user:', name, 'at position:', position);" +
+                            "return true;" +
+                        "} catch(e) {" +
+                            "console.error('Error creating cursor:', e);" +
+                            "return false;" +
+                        "}" +
+                    "}" +
+                    
+                    // Return the function for multiple calls
+                    "return createCursorElement;" +
+                "})()($0, $1, $2, $3, $4)"
+            );
+            
+            // Now create each cursor one by one using separate calls
             userCursors.forEach((id, pos) -> {
-                // Don't render your own cursor and don't render viewers' cursors
-                if (!id.equals(userId) && !userRegistry.getUserRole(id).equals("viewer")) {
+                if (!id.equals(userId) && pos >= 0) {
                     String color = userRegistry.getUserColor(id);
                     String role = userRegistry.getUserRole(id);
-                    String shortId = id.substring(0, 6);
-
+                    String shortId = id.substring(0, Math.min(id.length(), 6));
+                    
+                    // Each call is self-contained and doesn't rely on external functions
                     editor.getElement().executeJs(
-                            """
-                                        (function() {
-                                            const ta = this.inputElement;
-                                            if (!ta || pos < 0) return;
-
-                                            // Save original selection
-                                            const originalStart = ta.selectionStart;
-                                            const originalEnd = ta.selectionEnd;
-
-                                            // Move to position we want to show cursor for
-                                            ta.focus();
-                                            ta.setSelectionRange($0, $0);
-
-                                            // Get text coordinates (this uses a helper function since position calculation is complex)
-                                            function getCaretCoordinates() {
-                                                const rect = ta.getBoundingClientRect();
-                                                const position = $0;
-
-                                                // Create a mirror div to calculate position
-                                                const mirror = document.createElement('div');
-                                                mirror.style.position = 'absolute';
-                                                mirror.style.top = '0';
-                                                mirror.style.left = '0';
-                                                mirror.style.visibility = 'hidden';
-                                                mirror.style.whiteSpace = 'pre-wrap';
-                                                mirror.style.wordWrap = 'break-word';
-                                                mirror.style.font = window.getComputedStyle(ta).font;
-                                                mirror.style.padding = window.getComputedStyle(ta).padding;
-
-                                                // Add content up to cursor position
-                                                const textBeforeCursor = ta.value.substring(0, position);
-                                                mirror.textContent = textBeforeCursor;
-
-                                                // Add a span where cursor would be
-                                                const span = document.createElement('span');
-                                                span.textContent = '.';
-                                                mirror.appendChild(span);
-
-                                                document.body.appendChild(mirror);
-                                                const spanRect = span.getBoundingClientRect();
-                                                document.body.removeChild(mirror);
-
-                                                return {
-                                                    left: spanRect.left - rect.left + parseInt(window.getComputedStyle(ta).paddingLeft),
-                                                    top: spanRect.top - rect.top
-                                                };
-                                            }
-
-                                            // Get cursor position
-                                            const coords = getCaretCoordinates();
-                                            const lineHeight = parseFloat(window.getComputedStyle(ta).lineHeight);
-
-                                            // Create cursor element
-                                            const cursor = document.createElement('div');
-                                            cursor.className = 'remote-cursor';
-                                            cursor.style.position = 'absolute';
-                                            cursor.style.backgroundColor = $1;
-                                            cursor.style.width = '2px';
-                                            cursor.style.height = (lineHeight || 20) + 'px';
-
-                                            // Add user label
-                                            const label = document.createElement('div');
-                                            label.style.position = 'absolute';
-                                            label.style.top = '-20px';
-                                            label.style.left = '-3px';
-                                            label.style.backgroundColor = $1;
-                                            label.style.color = 'white';
-                                            label.style.padding = '2px 6px';
-                                            label.style.borderRadius = '3px';
-                                            label.style.fontSize = '12px';
-                                            label.style.whiteSpace = 'nowrap';
-                                            label.textContent = $2 + ' (' + $3 + ')';
-                                            cursor.appendChild(label);
-
-                                            // Position cursor relative to text area
-                                            const rect = ta.getBoundingClientRect();
-                                            document.body.appendChild(cursor);
-
-                                            cursor.style.left = (rect.left + coords.left) + 'px';
-                                            cursor.style.top = (rect.top + coords.top) + 'px';
-
-                                            // Add animation for blinking effect
-                                            cursor.animate([
-                                                { opacity: 1 },
-                                                { opacity: 0.3 },
-                                                { opacity: 1 }
-                                            ], {
-                                                duration: 1000,
-                                                iterations: Infinity
-                                            });
-
-                                            // Restore original selection
-                                            ta.setSelectionRange(originalStart, originalEnd);
-                                        })();
-                                    """,
-                            pos, color, shortId, role);
+                        "(() => {" +
+                            "try {" +
+                                "const ta = document.querySelector('vaadin-text-area').inputElement;" +
+                                "if (!ta) return false;" +
+                                
+                                "const userId = $0;" +
+                                "const position = $1;" +
+                                "const color = $2;" +
+                                "const name = $3;" +
+                                "const role = $4;" +
+                                
+                                // Create cursor with unique ID
+                                "const cursor = document.createElement('div');" +
+                                "cursor.id = 'cursor-' + userId;" +
+                                "cursor.className = 'remote-cursor';" +
+                                "cursor.style.position = 'fixed';" +
+                                "cursor.style.backgroundColor = color;" +
+                                "cursor.style.width = '4px';" +
+                                "cursor.style.height = '20px';" +
+                                "cursor.style.zIndex = '9999';" +
+                                "cursor.style.pointerEvents = 'none';" +
+                                "cursor.style.boxShadow = '0 0 5px ' + color;" +
+                                
+                                // Add user label
+                                "const label = document.createElement('div');" +
+                                "label.className = 'cursor-label';" +
+                                "label.style.backgroundColor = color;" +
+                                "label.style.color = 'white';" +
+                                "label.style.padding = '2px 5px';" +
+                                "label.style.borderRadius = '3px';" +
+                                "label.style.position = 'absolute';" +
+                                "label.style.top = '-20px';" +
+                                "label.style.left = '-2px';" +
+                                "label.style.whiteSpace = 'nowrap';" +
+                                "label.textContent = name + ' (' + role + ')';" +
+                                "cursor.appendChild(label);" +
+                                
+                                // Calculate position
+                                "const rect = ta.getBoundingClientRect();" +
+                                "const doc = ta.value.substring(0, position);" +
+                                "const lines = doc.split('\\n');" +
+                                "const lineIdx = lines.length - 1;" +
+                                "const lineText = lines[lineIdx];" +
+                                "const charWidth = 8;" + 
+                                "const lineHeight = 20;" +
+                                
+                                // Calculate exact position
+                                "const xPos = lineText.length * charWidth;" +
+                                "const yPos = lineIdx * lineHeight;" +
+                                "cursor.style.left = (rect.left + xPos + 5) + 'px';" +
+                                "cursor.style.top = (rect.top + yPos + 5) + 'px';" +
+                                
+                                // Add directly to body
+                                "document.body.appendChild(cursor);" +
+                                
+                                // Add animation
+                                "cursor.animate([" +
+                                    "{opacity: 1}, {opacity: 0.5}, {opacity: 1}" +
+                                "], {" +
+                                    "duration: 1500, iterations: Infinity" +
+                                "});" +
+                                
+                                "console.log('Created cursor for ' + name);" +
+                            "} catch(e) {" +
+                                "console.error('Error creating cursor:', e);" +
+                            "}" +
+                        "})();",
+                        id, pos, color, shortId, role
+                    );
                 }
             });
         }));
@@ -495,8 +582,11 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             getUI().ifPresent(ui -> ui.access(() -> {
                 // Store cursor position
                 userCursors.put(remoteUserId, pos);
-
-                // Re-render all cursors
+                
+                // Log for debugging
+                System.out.println("Received cursor update from " + remoteUserId + " at position " + pos);
+                
+                // Immediately render cursors for faster response
                 renderRemoteCursors();
             }));
         }
@@ -554,6 +644,46 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
     @Override
     protected void onAttach(AttachEvent attachEvent) {
         Broadcaster.register(this);
+        
+        // Position cursor container correctly and ensure CSS is loaded
+        getUI().ifPresent(ui -> ui.access(() -> {
+            // Make sure CSS is injected
+            getElement().executeJs(
+                "if (!document.getElementById('cursor-styles')) {" +
+                    "const style = document.createElement('style');" +
+                    "style.id = 'cursor-styles';" +
+                    "style.textContent = `" +
+                        ".remote-cursor {" +
+                        "  position: absolute;" +
+                        "  width: 4px;" +
+                        "  height: 20px;" +
+                        "  z-index: 9999;" +
+                        "  pointer-events: none;" +
+                        "  animation: cursor-blink 1s infinite;" +
+                        "}" +
+                        ".cursor-label {" +
+                        "  position: absolute;" +
+                        "  top: -20px;" +
+                        "  left: -2px;" +
+                        "  padding: 2px 5px;" +
+                        "  border-radius: 3px;" +
+                        "  font-size: 12px;" +
+                        "  font-weight: bold;" +
+                        "  white-space: nowrap;" +
+                        "  z-index: 10000;" +
+                        "}" +
+                        "@keyframes cursor-blink {" +
+                        "  0%, 100% { opacity: 1; }" +
+                        "  50% { opacity: 0.6; }" +
+                        "}" +
+                    "`;" +
+                    "document.head.appendChild(style);" +
+                "}"
+            );
+            
+            // Initialize cursor tracking
+            setupEnhancedCursorTracking();
+        }));
     }
 
     @Override
@@ -625,64 +755,224 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
     }
 
     private void addEditorStyles() {
-        // Add to your existing styles
+
+        // Add styles to document head with improved cursor visibility
         getElement().executeJs(
                 "const style = document.createElement('style');" +
                         "style.textContent = `" +
-                        // Your existing styles
-
-                        // Comment styles
-                        ".comment-highlight {" +
-                        "    background-color: rgba(255, 255, 0, 0.2);" +
-                        "    border-bottom: 1px dashed #666;" +
+                        // Remote cursor styles with enhanced visibility
+                        ".remote-cursor {" +
+                        "    position: fixed;" +
+                        "    height: 20px;" +
+                        "    width: 6px;" +  // Increased from 4px to 6px
+                        "    pointer-events: none;" +
+                        "    z-index: 9999;" + // Very high z-index to ensure visibility
+                        "    border-radius: 1px;" +
+                        "    animation: cursor-pulse 1s infinite ease-in-out;" +
+                        "    box-shadow: 0 0 10px currentColor, 0 0 5px currentColor;" + // Enhanced glow for visibility
                         "}" +
                         ".comment-marker {" +
                         "    position: absolute;" +
-                        "    width: 8px;" +
-                        "    height: 8px;" +
-                        "    border-radius: 50%;" +
-                        "    z-index: 1000;" +
-                        "    cursor: pointer;" +
-                        "    box-shadow: 0 0 3px rgba(0,0,0,0.4);" +
+
+                        "    top: -24px;" +
+                        "    left: -3px;" +
+                        "    font-size: 12px;" +
+                        "    padding: 3px 8px;" +
+                        "    white-space: nowrap;" +
+                        "    border-radius: 3px;" +
+                        "    color: white;" +
+                        "    font-weight: bold;" +
+                        "    z-index: 10000;" + // Even higher z-index for labels
+                        "    box-shadow: 0 1px 3px rgba(0,0,0,0.5);" +
+                        "}" +
+                        // Animation for cursor pulsing
+                        "@keyframes cursor-pulse {" +
+                        "    0%, 100% { opacity: 1; transform: scale(1); }" +
+                        "    50% { opacity: 0.8; transform: scale(1.05); }" +
                         "}`;" +
                         "document.head.appendChild(style);");
+        
+        // NEW CODE: Apply custom caret color to the editor based on user's assigned color
+        editor.getElement().executeJs(
+                "this.inputElement.style.caretColor = $0;" +
+                // Add a subtle glow effect to the caret
+                "this.inputElement.style.textShadow = '0 0 0.5px ' + $0;" +
+                "console.log('Applied custom caret color: ' + $0);",
+                userColor
+        );
     }
 
     private void setupEnhancedCursorTracking() {
-        // Add this method to your class
-        editor.getElement().executeJs("""
-                    this.addEventListener('click', function() {
-                        this.$server.handleCursorPosition(this.inputElement.selectionStart);
-                    });
-                    this.addEventListener('keyup', function(e) {
-                        this.$server.handleCursorPosition(this.inputElement.selectionStart);
-                    });
-                    this.addEventListener('focus', function() {
-                        this.$server.handleCursorPosition(this.inputElement.selectionStart);
-                    });
-                    this.addEventListener('mousemove', function(e) {
-                        if (e.buttons === 1) { // Mouse button is pressed
-                            this.$server.handleCursorPosition(this.inputElement.selectionStart);
-                        }
-                    });
-                    this.addEventListener('selectionchange', function() {
-                        this.$server.handleCursorPosition(this.inputElement.selectionStart);
-                    });
-                """);
+        editor.getElement().executeJs(
+            // Use a global registry approach instead of depending on $server
+            "window.vaadinCursorTracker = {" +
+                "positions: {}, " +
+                "sendPosition: function(pos) {" +
+                    "if (this.serverConnected) {" +
+                        "console.log('Sending cursor position:', pos);" +
+                        "this.element.$server.handleCursorPosition(pos);" +
+                        "return true;" +
+                    "} else {" +
+                        "console.log('Server connection not ready yet');" +
+                        "return false;" +
+                    "}" +
+                "}, " +
+                "init: function(element) {" +
+                    "this.element = element;" +
+                    "this.serverConnected = !!element.$server;" +
+                    "this.setupEventHandlers();" +
+                    "this.startConnectionCheck();" +
+                "}," +
+                "setupEventHandlers: function() {" +
+                    "if (!this.element.inputElement) {" +
+                        "setTimeout(() => this.setupEventHandlers(), 200);" +
+                        "return;" +
+                    "}" +
+                    
+                    "const tracker = this;" +
+                    "const input = this.element.inputElement;" +
+                    
+                    "const sendPos = function() {" +
+                        "tracker.sendPosition(input.selectionStart);" +
+                    "};" +
+                    
+                    "input.addEventListener('click', sendPos);" +
+                    "input.addEventListener('keyup', sendPos);" +
+                    "input.addEventListener('mouseup', sendPos);" +
+                    
+                    "input.addEventListener('keydown', function(e) {" +
+                        "if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End') {" +
+                            "setTimeout(sendPos, 10);" +
+                        "}" +
+                    "});" +
+                    
+                    "input.addEventListener('focus', sendPos);" +
+                    
+                    "console.log('Event handlers registered');" +
+                "}," +
+                "startConnectionCheck: function() {" +
+                    "const tracker = this;" +
+                    "const checkConnection = function() {" +
+                        "tracker.serverConnected = !!tracker.element.$server;" +
+                        "if (tracker.serverConnected) {" +
+                            "console.log('Server connection established');" +
+                        "} else {" +
+                            "console.log('Waiting for server connection...');" +
+                            "setTimeout(checkConnection, 500);" +
+                        "}" +
+                    "};" +
+                    "checkConnection();" +
+                    
+                    "// Also set up a periodic position sender" +
+                    "setInterval(() => {" +
+                        "if (document.activeElement === tracker.element.inputElement) {" +
+                            "tracker.sendPosition(tracker.element.inputElement.selectionStart);" +
+                        "}" +
+                    "}, 2000);" +
+                "}" +
+            "};" +
+            "window.vaadinCursorTracker.init(this);"
+        );
+
+        // Add this at the end of the method to create a custom cursor for the current user
+        editor.getElement().executeJs(
+            "(() => {" +
+                "const createLocalCursor = () => {" +
+                    "// Remove any existing local cursor" +
+                    "const existingCursor = document.getElementById('local-cursor-indicator');" +
+                    "if (existingCursor) existingCursor.remove();" +
+                    
+                    "// Create local cursor element" +
+                    "const cursor = document.createElement('div');" +
+                    "cursor.id = 'local-cursor-indicator';" +
+                    "cursor.style.position = 'absolute';" +
+                    "cursor.style.width = '6px';" +
+                    "cursor.style.height = '20px';" +
+                    "cursor.style.backgroundColor = $0;" + // User's color
+                    "cursor.style.opacity = '0.7';" +
+                    "cursor.style.pointerEvents = 'none';" +
+                    "cursor.style.zIndex = '9998';" + // Below remote cursors
+                    "cursor.style.boxShadow = '0 0 8px ' + $0;" +
+                    "cursor.style.transition = 'left 0.1s, top 0.1s';" +
+                    
+                    "// Add to DOM" +
+                    "document.body.appendChild(cursor);" +
+                    
+                    "// Add a label with user name (you)" +
+                    "const label = document.createElement('div');" +
+                    "label.textContent = 'You';" +
+                    "label.style.position = 'absolute';" +
+                    "label.style.top = '-20px';" +
+                    "label.style.left = '0';" +
+                    "label.style.backgroundColor = $0;" +
+                    "label.style.color = 'white';" +
+                    "label.style.padding = '2px 5px';" +
+                    "label.style.borderRadius = '3px';" +
+                    "label.style.fontSize = '12px';" +
+                    "label.style.fontWeight = 'bold';" +
+                    "label.style.whiteSpace = 'nowrap';" +
+                    "cursor.appendChild(label);" +
+                    
+                    "return cursor;" +
+                "};" +
+                
+                "// Create the cursor" +
+                "const localCursor = createLocalCursor();" +
+                
+                "// Function to update its position" + 
+                "const updatePosition = () => {" +
+                    "if (!this.inputElement) return;" +
+                    
+                    "const ta = this.inputElement;" +
+                    "const pos = ta.selectionStart;" +
+                    "const rect = ta.getBoundingClientRect();" +
+                    
+                    "const text = ta.value.substring(0, pos);" +
+                    "const lines = text.split('\\n');" +
+                    "const lineIdx = lines.length - 1;" +
+                    "const lineText = lines[lineIdx];" +
+                    "const charWidth = 8;" + 
+                    "const lineHeight = 20;" +
+                    
+                    "const xPos = lineText.length * charWidth + 4;" +
+                    "const yPos = lineIdx * lineHeight + 4;" +
+                    
+                    "localCursor.style.left = (rect.left + xPos) + 'px';" +
+                    "localCursor.style.top = (rect.top + yPos) + 'px';" +
+                "};" +
+                
+                "// Update position on various events" + 
+                "this.inputElement.addEventListener('click', updatePosition);" +
+                "this.inputElement.addEventListener('keyup', updatePosition);" +
+                "this.inputElement.addEventListener('mouseup', updatePosition);" +
+                "this.inputElement.addEventListener('focus', updatePosition);" +
+                
+                "// Initial position update" +
+                "setTimeout(updatePosition, 100);" +
+                
+                "// Periodic updates" +
+                "setInterval(updatePosition, 500);" +
+            "})();",
+            userColor
+        );
     }
 
     private void schedulePeriodicCursorUpdates() {
-        // Add this method to your class
         getUI().ifPresent(ui -> {
+            ui.setPollInterval(500); // Poll every 500ms to keep UI responsive
+            
             new Thread(() -> {
                 while (true) {
                     try {
-                        Thread.sleep(2000); // Update every 2 seconds
+                        Thread.sleep(800); // Update every 800ms 
                         ui.access(() -> {
                             if (!userRole.equals("viewer") && !sessionCode.isEmpty()) {
+                                // Re-broadcast your cursor position regularly
                                 Broadcaster.broadcastCursor(userId, cursorPosition, userColor, sessionCode);
+                                
+                                // Always re-render cursors to ensure they stay visible
+                                renderRemoteCursors();
                             }
-                            renderRemoteCursors();
                         });
                     } catch (InterruptedException e) {
                         break;
@@ -897,5 +1187,42 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             crdtBuffer.addExistingComment(comment); // Use proper method
             renderComments();
         }));
+
+    private void addCursorStyles() {
+        getElement().executeJs(
+            "const style = document.createElement('style');" +
+            "style.id = 'cursor-styles-direct';" +
+            "style.textContent = `" +
+                ".remote-cursor {" +
+                "  position: fixed;" + // Use fixed positioning for viewport coordinates
+                "  width: 4px;" +
+                "  height: 20px;" +
+                "  z-index: 9999;" +
+                "  pointer-events: none;" +
+                "  animation: cursor-blink 1s infinite;" +
+                "  box-shadow: 0 0 8px currentColor;" + // Add glow effect
+                "}" +
+                ".cursor-label {" +
+                "  position: absolute;" +
+                "  top: -20px;" +
+                "  left: 0;" +
+                "  background-color: inherit;" +
+                "  color: white;" +
+                "  padding: 2px 5px;" +
+                "  border-radius: 3px;" +
+                "  font-size: 12px;" +
+                "  font-weight: bold;" + // Make text bold
+                "  white-space: nowrap;" +
+                "  z-index: 10000;" +
+                "  box-shadow: 0 1px 4px rgba(0,0,0,0.4);" + // Add shadow
+                "}" +
+                "@keyframes cursor-blink {" +
+                "  0%, 100% { opacity: 1; }" +
+                "  50% { opacity: 0.6; }" +
+                "}" +
+            "`;" +
+            "document.head.appendChild(style);"
+        );
+
     }
 }
