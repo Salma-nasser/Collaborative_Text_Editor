@@ -53,10 +53,10 @@ import java.util.Comparator;
 @Route("")
 @StyleSheet("context://styles/cursor-styles.css")
 public class EditorView extends VerticalLayout implements Broadcaster.BroadcastListener {
-    private final CrdtBuffer crdtBuffer = SharedBuffer.getInstance();
+    // private final CrdtBuffer crdtBuffer = SharedBuffer.getInstance();
     private TextArea editor;
     private int cursorPosition = 0;
-    
+
     private final VerticalLayout userPanel = new VerticalLayout();
     private final UserRegistry userRegistry = UserRegistry.getInstance();
     private final String userId = UUID.randomUUID().toString();
@@ -92,12 +92,12 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
 
         // And you can add listeners to editor
         editor.getElement().executeJs("""
-            this.addEventListener('click', function() {
-                console.log('Cursor click: ' + this.inputElement.selectionStart);
-                this.$server.handleCursorPosition(this.inputElement.selectionStart);
-            });
-            // Rest of your event listeners...
-        """);
+                    this.addEventListener('click', function() {
+                        console.log('Cursor click: ' + this.inputElement.selectionStart);
+                        this.$server.handleCursorPosition(this.inputElement.selectionStart);
+                    });
+                    // Rest of your event listeners...
+                """);
 
         VaadinSession.getCurrent().setAttribute("userId", userId);
         // Top Toolbar Buttons (Optional for future features like undo/redo)
@@ -113,20 +113,20 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             try {
                 String content = new String(buffer.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
                 // Clear the CRDT buffer before importing new content
-                crdtBuffer.clear();
+                getCrdtBuffer().clear();
                 // Insert each character into the CRDT buffer
                 String parentId = "0";
                 for (char c : content.toCharArray()) {
-                    crdtBuffer.insert(c, parentId);
-                    parentId = crdtBuffer.getNodeIdAtPosition(crdtBuffer.getDocument().length() - 1);
+                    getCrdtBuffer().insert(c, parentId);
+                    parentId = getCrdtBuffer().getNodeIdAtPosition(getCrdtBuffer().getDocument().length() - 1);
                 }
                 // Update the editor value (this will trigger valueChangeListener, but you can
                 // skip broadcasting there)
                 editor.setValue(content);
                 // Broadcast the new buffer state to all users
                 Broadcaster.broadcast(
-                        new ArrayList<>(crdtBuffer.getAllNodes()),
-                        new ArrayList<>(crdtBuffer.getDeletedNodes()), sessionCode);
+                        new ArrayList<>(getCrdtBuffer().getAllNodes()),
+                        new ArrayList<>(getCrdtBuffer().getDeletedNodes()), sessionCode);
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -219,12 +219,11 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
 
             // Get current cursor position before any modification
             PendingJavaScriptResult currentPosResult = editor.getElement().executeJs(
-                "return this.inputElement.selectionStart;"
-            );
-            
+                    "return this.inputElement.selectionStart;");
+
             currentPosResult.then(Integer.class, currentPos -> {
                 String newText = event.getValue();
-                String oldText = crdtBuffer.getDocument();
+                String oldText = getCrdtBuffer().getDocument();
 
                 System.out.println("Value change event - cursor at: " + currentPos);
                 System.out.println("Old text: '" + oldText + "'");
@@ -254,9 +253,9 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                 final boolean hasDeletions = finalEndOld >= finalStart;
                 final boolean hasInsertions = finalStart <= finalEndNew;
                 final int finalCursorPos = currentPos;
-                
+
                 // Track if we need to broadcast changes at the end
-                final boolean[] needsBroadcast = {false};
+                final boolean[] needsBroadcast = { false };
 
                 // Process all changes at once instead of separately
                 if (hasDeletions) {
@@ -268,65 +267,65 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                 if (hasInsertions) {
                     // Calculate the parent node id for insertion
                     String baseParentId;
-                    
+
                     if (finalStart == 0) {
                         baseParentId = "0"; // Root node
                         System.out.println("Using ROOT node as parent for first character insertion");
                     } else {
                         // Get the node right before the insertion point
-                        baseParentId = crdtBuffer.getNodeIdAtPosition(finalStart - 1);
-                        System.out.println("Using base parent ID: " + baseParentId + " for insertion at pos: " + finalStart);
+                        baseParentId = getCrdtBuffer().getNodeIdAtPosition(finalStart - 1);
+                        System.out.println(
+                                "Using base parent ID: " + baseParentId + " for insertion at pos: " + finalStart);
                     }
-                    
+
                     // Use a temporary local variable to track parent ID through the closure
-                    final String[] currentParentId = {baseParentId};
-                    
+                    final String[] currentParentId = { baseParentId };
+
                     // Special case for the very first character in the document
                     if (oldText.isEmpty() && !newText.isEmpty()) {
                         System.out.println("First character in document, using ROOT as parent");
                         baseParentId = "0";
                         currentParentId[0] = "0";
                     }
-                    
+
                     // Insert each character with the correct parent ID chain
                     for (int i = finalStart; i <= finalEndNew; i++) {
                         final int index = i; // To use in lambda
                         char c = newText.charAt(i);
-                        
+
                         // Debug the current operation
-                        System.out.println("Inserting '" + c + "' with parent ID: " + currentParentId[0] + 
-                                           " at logical position: " + i);
-                        
+                        System.out.println("Inserting '" + c + "' with parent ID: " + currentParentId[0] +
+                                " at logical position: " + i);
+
                         // Important: Insert synchronously to maintain order
-                        String newNodeId = crdtBuffer.insertAndReturnId(c, currentParentId[0]);
+                        String newNodeId = getCrdtBuffer().insertAndReturnId(c, currentParentId[0]);
                         currentParentId[0] = newNodeId; // Update parent for next character
                     }
-                    
+
                     needsBroadcast[0] = true;
                 }
-                
+
                 if (needsBroadcast[0]) {
                     // Only broadcast once at the end of all operations
                     Broadcaster.broadcast(
-                        new ArrayList<>(crdtBuffer.getAllNodes()),
-                        new ArrayList<>(crdtBuffer.getDeletedNodes()), sessionCode);
-                        
+                            new ArrayList<>(getCrdtBuffer().getAllNodes()),
+                            new ArrayList<>(getCrdtBuffer().getDeletedNodes()), sessionCode);
+
                     // Debug: print the resulting document and CRDT tree
-                    System.out.println("Final document after operations: '" + crdtBuffer.getDocument() + "'");
+                    System.out.println("Final document after operations: '" + getCrdtBuffer().getDocument() + "'");
                 }
-                
+
                 // IMPORTANT: Restore cursor position after all operations
                 int adjustedCursorPos = finalCursorPos;
                 if (hasDeletions && !hasInsertions) {
                     // When just deleting, maintain position at the start of the deletion
                     adjustedCursorPos = finalStart;
                 }
-                    
+
                 // Set the cursor position to its original location or the adjusted position
                 editor.getElement().executeJs(
-                    "this.inputElement.setSelectionRange($0, $0);",
-                    adjustedCursorPos
-                );
+                        "this.inputElement.setSelectionRange($0, $0);",
+                        adjustedCursorPos);
                 cursorPosition = adjustedCursorPos;
             });
         });
@@ -335,16 +334,16 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
         editor.getElement().addEventListener("mouseup", e -> {
             getUI().ifPresent(ui -> ui.access(() -> {
                 editor.getElement().executeJs(
-                    "return {start: this.inputElement.selectionStart, end: this.inputElement.selectionEnd}"
-                ).then(JsonObject.class, range -> {
-                    int start = (int) range.getNumber("start");
-                    int end = (int) range.getNumber("end");
-                    boolean hasSelection = start != end;
-                    
-                    System.out.println("Direct selection handler: " + start + " to " + end + 
+                        "return {start: this.inputElement.selectionStart, end: this.inputElement.selectionEnd}")
+                        .then(JsonObject.class, range -> {
+                            int start = (int) range.getNumber("start");
+                            int end = (int) range.getNumber("end");
+                            boolean hasSelection = start != end;
+
+                            System.out.println("Direct selection handler: " + start + " to " + end +
                                     " (hasSelection=" + hasSelection + ")");
-                    updateSelectionState(hasSelection);
-                });
+                            updateSelectionState(hasSelection);
+                        });
             }));
         });
 
@@ -357,10 +356,10 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
         // Initialize comments panel
         commentsPanel.setWidth("250px");
         commentsPanel.getStyle()
-            .set("background-color", "#f9f9f9")
-            .set("border-left", "1px solid #ddd")
-            .set("padding", "10px")
-            .set("overflow-y", "auto");
+                .set("background-color", "#f9f9f9")
+                .set("border-left", "1px solid #ddd")
+                .set("padding", "10px")
+                .set("overflow-y", "auto");
         commentsPanel.add(new H3("Comments"));
 
         // Update the layout to include comments panel
@@ -402,8 +401,7 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             // Ensure cursor tracking is initialized after the component is attached
             getUI().ifPresent(ui -> ui.access(() -> {
                 ui.getPage().executeJs(
-                    "console.log('Editor attached, initializing cursors...');"
-                );
+                        "console.log('Editor attached, initializing cursors...');");
                 setupEnhancedCursorTracking();
                 addCursorStyles();
             }));
@@ -447,21 +445,23 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
     private void renderRemoteCursors() {
         getUI().ifPresent(ui -> ui.access(() -> {
             System.out.println("Rendering remote cursors. Active users: " + userCursors.size());
-            
-            // Using a self-contained approach that doesn't rely on external function definitions
+
+            // Using a self-contained approach that doesn't rely on external function
+            // definitions
             editor.getElement().executeJs(
-                // Define the cursor creation function and immediately execute it for each cursor
-                "(() => {" +
-                    // First clean up any old cursors
-                    "document.querySelectorAll('.remote-cursor').forEach(el => el.remove());" +
-                    
-                    // Function to safely create a cursor (defined inside the IIFE)
-                    "function createCursorElement(userId, position, color, name, role) {" +
-                        "try {" +
+                    // Define the cursor creation function and immediately execute it for each
+                    // cursor
+                    "(() => {" +
+            // First clean up any old cursors
+                            "document.querySelectorAll('.remote-cursor').forEach(el => el.remove());" +
+
+            // Function to safely create a cursor (defined inside the IIFE)
+                            "function createCursorElement(userId, position, color, name, role) {" +
+                            "try {" +
                             "const ta = document.querySelector('vaadin-text-area').inputElement;" +
                             "if (!ta) return false;" +
-                            
-                            // Create cursor element
+
+            // Create cursor element
                             "const cursor = document.createElement('div');" +
                             "cursor.className = 'remote-cursor';" +
                             "cursor.id = 'cursor-' + userId;" +
@@ -471,8 +471,8 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                             "cursor.style.height = '20px';" +
                             "cursor.style.zIndex = '9999';" +
                             "cursor.style.pointerEvents = 'none';" +
-                            
-                            // Add user label
+
+            // Add user label
                             "const label = document.createElement('div');" +
                             "label.className = 'cursor-label';" +
                             "label.style.backgroundColor = color;" +
@@ -484,129 +484,127 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                             "label.style.left = '-2px';" +
                             "label.textContent = name + ' (' + role + ')';" +
                             "cursor.appendChild(label);" +
-                            
-                            // Calculate position
+
+            // Calculate position
                             "const rect = ta.getBoundingClientRect();" +
                             "const doc = ta.value.substring(0, position);" +
                             "const lines = doc.split('\\n');" +
                             "const lineIdx = lines.length - 1;" +
                             "const lineText = lines[lineIdx];" +
-                            "const charWidth = 8;" + 
+                            "const charWidth = 8;" +
                             "const lineHeight = 20;" +
-                            
+
                             "const xPos = lineText.length * charWidth + 4;" +
                             "const yPos = lineIdx * lineHeight + 4;" +
-                            
+
                             "cursor.style.left = xPos + 'px';" +
                             "cursor.style.top = yPos + 'px';" +
-                            
-                            // Add to DOM - directly to document body for better visibility
+
+            // Add to DOM - directly to document body for better visibility
                             "document.body.appendChild(cursor);" +
-                            
-                            // Position relative to textarea
+
+            // Position relative to textarea
                             "const taRect = ta.getBoundingClientRect();" +
                             "cursor.style.position = 'fixed';" +
                             "cursor.style.left = (taRect.left + xPos) + 'px';" +
                             "cursor.style.top = (taRect.top + yPos) + 'px';" +
-                            
-                            // Add animation
+
+            // Add animation
                             "cursor.animate([" +
-                                "{opacity: 1}, {opacity: 0.5}, {opacity: 1}" +
+                            "{opacity: 1}, {opacity: 0.5}, {opacity: 1}" +
                             "], {" +
-                                "duration: 1500, iterations: Infinity" +
+                            "duration: 1500, iterations: Infinity" +
                             "});" +
-                            
+
                             "console.log('Created cursor for user:', name, 'at position:', position);" +
                             "return true;" +
-                        "} catch(e) {" +
+                            "} catch(e) {" +
                             "console.error('Error creating cursor:', e);" +
                             "return false;" +
-                        "}" +
-                    "}" +
-                    
-                    // Return the function for multiple calls
-                    "return createCursorElement;" +
-                "})()($0, $1, $2, $3, $4)"
-            );
-            
+                            "}" +
+                            "}" +
+
+            // Return the function for multiple calls
+                            "return createCursorElement;" +
+                            "})()($0, $1, $2, $3, $4)");
+
             // Now create each cursor one by one using separate calls
             userCursors.forEach((id, pos) -> {
                 if (!id.equals(userId) && pos >= 0) {
                     String color = userRegistry.getUserColor(id);
                     String role = userRegistry.getUserRole(id);
                     String shortId = id.substring(0, Math.min(id.length(), 6));
-                    
+
                     // Each call is self-contained and doesn't rely on external functions
                     editor.getElement().executeJs(
-                        "(() => {" +
-                            "try {" +
-                                "const ta = document.querySelector('vaadin-text-area').inputElement;" +
-                                "if (!ta) return false;" +
-                                
-                                "const userId = $0;" +
-                                "const position = $1;" +
-                                "const color = $2;" +
-                                "const name = $3;" +
-                                "const role = $4;" +
-                                
-                                // Create cursor with unique ID
-                                "const cursor = document.createElement('div');" +
-                                "cursor.id = 'cursor-' + userId;" +
-                                "cursor.className = 'remote-cursor';" +
-                                "cursor.style.position = 'fixed';" +
-                                "cursor.style.backgroundColor = color;" +
-                                "cursor.style.width = '4px';" +
-                                "cursor.style.height = '20px';" +
-                                "cursor.style.zIndex = '9999';" +
-                                "cursor.style.pointerEvents = 'none';" +
-                                "cursor.style.boxShadow = '0 0 5px ' + color;" +
-                                
-                                // Add user label
-                                "const label = document.createElement('div');" +
-                                "label.className = 'cursor-label';" +
-                                "label.style.backgroundColor = color;" +
-                                "label.style.color = 'white';" +
-                                "label.style.padding = '2px 5px';" +
-                                "label.style.borderRadius = '3px';" +
-                                "label.style.position = 'absolute';" +
-                                "label.style.top = '-20px';" +
-                                "label.style.left = '-2px';" +
-                                "label.style.whiteSpace = 'nowrap';" +
-                                "label.textContent = name + ' (' + role + ')';" +
-                                "cursor.appendChild(label);" +
-                                
-                                // Calculate position
-                                "const rect = ta.getBoundingClientRect();" +
-                                "const doc = ta.value.substring(0, position);" +
-                                "const lines = doc.split('\\n');" +
-                                "const lineIdx = lines.length - 1;" +
-                                "const lineText = lines[lineIdx];" +
-                                "const charWidth = 8;" + 
-                                "const lineHeight = 20;" +
-                                
-                                // Calculate exact position
-                                "const xPos = lineText.length * charWidth;" +
-                                "const yPos = lineIdx * lineHeight;" +
-                                "cursor.style.left = (rect.left + xPos + 5) + 'px';" +
-                                "cursor.style.top = (rect.top + yPos + 5) + 'px';" +
-                                
-                                // Add directly to body
-                                "document.body.appendChild(cursor);" +
-                                
-                                // Add animation
-                                "cursor.animate([" +
+                            "(() => {" +
+                                    "try {" +
+                                    "const ta = document.querySelector('vaadin-text-area').inputElement;" +
+                                    "if (!ta) return false;" +
+
+                                    "const userId = $0;" +
+                                    "const position = $1;" +
+                                    "const color = $2;" +
+                                    "const name = $3;" +
+                                    "const role = $4;" +
+
+                    // Create cursor with unique ID
+                                    "const cursor = document.createElement('div');" +
+                                    "cursor.id = 'cursor-' + userId;" +
+                                    "cursor.className = 'remote-cursor';" +
+                                    "cursor.style.position = 'fixed';" +
+                                    "cursor.style.backgroundColor = color;" +
+                                    "cursor.style.width = '4px';" +
+                                    "cursor.style.height = '20px';" +
+                                    "cursor.style.zIndex = '9999';" +
+                                    "cursor.style.pointerEvents = 'none';" +
+                                    "cursor.style.boxShadow = '0 0 5px ' + color;" +
+
+                    // Add user label
+                                    "const label = document.createElement('div');" +
+                                    "label.className = 'cursor-label';" +
+                                    "label.style.backgroundColor = color;" +
+                                    "label.style.color = 'white';" +
+                                    "label.style.padding = '2px 5px';" +
+                                    "label.style.borderRadius = '3px';" +
+                                    "label.style.position = 'absolute';" +
+                                    "label.style.top = '-20px';" +
+                                    "label.style.left = '-2px';" +
+                                    "label.style.whiteSpace = 'nowrap';" +
+                                    "label.textContent = name + ' (' + role + ')';" +
+                                    "cursor.appendChild(label);" +
+
+                    // Calculate position
+                                    "const rect = ta.getBoundingClientRect();" +
+                                    "const doc = ta.value.substring(0, position);" +
+                                    "const lines = doc.split('\\n');" +
+                                    "const lineIdx = lines.length - 1;" +
+                                    "const lineText = lines[lineIdx];" +
+                                    "const charWidth = 8;" +
+                                    "const lineHeight = 20;" +
+
+                    // Calculate exact position
+                                    "const xPos = lineText.length * charWidth;" +
+                                    "const yPos = lineIdx * lineHeight;" +
+                                    "cursor.style.left = (rect.left + xPos + 5) + 'px';" +
+                                    "cursor.style.top = (rect.top + yPos + 5) + 'px';" +
+
+                    // Add directly to body
+                                    "document.body.appendChild(cursor);" +
+
+                    // Add animation
+                                    "cursor.animate([" +
                                     "{opacity: 1}, {opacity: 0.5}, {opacity: 1}" +
-                                "], {" +
+                                    "], {" +
                                     "duration: 1500, iterations: Infinity" +
-                                "});" +
-                                
-                                "console.log('Created cursor for ' + name);" +
-                            "} catch(e) {" +
-                                "console.error('Error creating cursor:', e);" +
-                            "}" +
-                        "})();",
-                        id, pos, color, shortId, role
-                    );
+                                    "});" +
+
+                                    "console.log('Created cursor for ' + name);" +
+                                    "} catch(e) {" +
+                                    "console.error('Error creating cursor:', e);" +
+                                    "}" +
+                                    "})();",
+                            id, pos, color, shortId, role);
                 }
             });
         }));
@@ -616,8 +614,8 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
     @Override
     public void receiveBroadcast(List<CrdtNode> incomingNodes, List<CrdtNode> incomingDeleted) {
         getUI().ifPresent(ui -> ui.access(() -> {
-            crdtBuffer.merge(incomingNodes, incomingDeleted);
-            String doc = crdtBuffer.getDocument();
+            getCrdtBuffer().merge(incomingNodes, incomingDeleted);
+            String doc = getCrdtBuffer().getDocument();
             int pos = cursorPosition; // Save current cursor position
 
             editor.setValue(doc);
@@ -639,10 +637,10 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             getUI().ifPresent(ui -> ui.access(() -> {
                 // Store cursor position
                 userCursors.put(remoteUserId, pos);
-                
+
                 // Log for debugging
                 System.out.println("Received cursor update from " + remoteUserId + " at position " + pos);
-                
+
                 // Immediately render cursors for faster response
                 renderRemoteCursors();
             }));
@@ -701,43 +699,42 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
     @Override
     protected void onAttach(AttachEvent attachEvent) {
         Broadcaster.register(this);
-        
+
         // Position cursor container correctly and ensure CSS is loaded
         getUI().ifPresent(ui -> ui.access(() -> {
             // Make sure CSS is injected
             getElement().executeJs(
-                "if (!document.getElementById('cursor-styles')) {" +
-                    "const style = document.createElement('style');" +
-                    "style.id = 'cursor-styles';" +
-                    "style.textContent = `" +
-                        ".remote-cursor {" +
-                        "  position: absolute;" +
-                        "  width: 4px;" +
-                        "  height: 20px;" +
-                        "  z-index: 9999;" +
-                        "  pointer-events: none;" +
-                        "  animation: cursor-blink 1s infinite;" +
-                        "}" +
-                        ".cursor-label {" +
-                        "  position: absolute;" +
-                        "  top: -20px;" +
-                        "  left: -2px;" +
-                        "  padding: 2px 5px;" +
-                        "  border-radius: 3px;" +
-                        "  font-size: 12px;" +
-                        "  font-weight: bold;" +
-                        "  white-space: nowrap;" +
-                        "  z-index: 10000;" +
-                        "}" +
-                        "@keyframes cursor-blink {" +
-                        "  0%, 100% { opacity: 1; }" +
-                        "  50% { opacity: 0.6; }" +
-                        "}" +
-                    "`;" +
-                    "document.head.appendChild(style);" +
-                "}"
-            );
-            
+                    "if (!document.getElementById('cursor-styles')) {" +
+                            "const style = document.createElement('style');" +
+                            "style.id = 'cursor-styles';" +
+                            "style.textContent = `" +
+                            ".remote-cursor {" +
+                            "  position: absolute;" +
+                            "  width: 4px;" +
+                            "  height: 20px;" +
+                            "  z-index: 9999;" +
+                            "  pointer-events: none;" +
+                            "  animation: cursor-blink 1s infinite;" +
+                            "}" +
+                            ".cursor-label {" +
+                            "  position: absolute;" +
+                            "  top: -20px;" +
+                            "  left: -2px;" +
+                            "  padding: 2px 5px;" +
+                            "  border-radius: 3px;" +
+                            "  font-size: 12px;" +
+                            "  font-weight: bold;" +
+                            "  white-space: nowrap;" +
+                            "  z-index: 10000;" +
+                            "}" +
+                            "@keyframes cursor-blink {" +
+                            "  0%, 100% { opacity: 1; }" +
+                            "  50% { opacity: 0.6; }" +
+                            "}" +
+                            "`;" +
+                            "document.head.appendChild(style);" +
+                            "}");
+
             // Initialize cursor tracking
             setupEnhancedCursorTracking();
         }));
@@ -771,20 +768,21 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
     private void updateSelectionState(boolean hasSelection) {
         System.out.println("Selection state changed: " + hasSelection + ", Role: " + userRole);
 
-        // Always enable the comment button when there's a selection and the user is not a viewer
+        // Always enable the comment button when there's a selection and the user is not
+        // a viewer
         if (commentButton != null) {
             boolean shouldEnable = hasSelection && !"viewer".equals(userRole);
             commentButton.setEnabled(shouldEnable);
-            
-            System.out.println("Comment button enabled: " + shouldEnable + 
-                            " (hasSelection=" + hasSelection + 
-                            ", role=" + userRole + ")");
-            
+
+            System.out.println("Comment button enabled: " + shouldEnable +
+                    " (hasSelection=" + hasSelection +
+                    ", role=" + userRole + ")");
+
             // Force UI update
             getUI().ifPresent(ui -> ui.access(() -> {
                 commentButton.getElement().setProperty("disabled", !shouldEnable);
                 commentButton.getStyle().set("opacity", shouldEnable ? "1" : "0.5");
-                
+
                 // Visual indicator for debug purposes
                 if (shouldEnable) {
                     commentButton.getStyle().set("background-color", "#4CAF50");
@@ -796,7 +794,7 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
             System.err.println("Comment button is null, cannot update state");
         }
     }
-    
+
     private void initializeSessionComponents() {
         sessionCodeField = new TextField("Session Code");
         joinSessionButton = new Button("Join Session", e -> joinSession());
@@ -806,23 +804,23 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
         commentButton = new Button("Add Comment", e -> addComment());
         commentButton.setEnabled(false);
         commentButton.setId("comment-button"); // Add an ID for easier reference
-        
+
         // Add styles to make the disabled state more visible
         commentButton.getStyle().set("opacity", "0.5");
         commentButton.getStyle().set("transition", "opacity 0.3s, background-color 0.3s");
-        
+
         // REPLACE the addClickListener with this element event listener
         editor.getElement().addEventListener("click", e -> {
             getUI().ifPresent(ui -> ui.access(() -> {
                 // Get current selection state directly
                 PendingJavaScriptResult js = editor.getElement().executeJs(
-                    "return {start: this.inputElement.selectionStart, end: this.inputElement.selectionEnd}");
-                    
+                        "return {start: this.inputElement.selectionStart, end: this.inputElement.selectionEnd}");
+
                 js.then(JsonObject.class, range -> {
                     int start = (int) range.getNumber("start");
                     int end = (int) range.getNumber("end");
                     boolean hasSelection = start != end;
-                        
+
                     // Update button state
                     updateSelectionState(hasSelection);
                 });
@@ -870,7 +868,7 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                         ".remote-cursor {" +
                         "    position: fixed;" +
                         "    height: 20px;" +
-                        "    width: 6px;" +  // Increased from 4px to 6px
+                        "    width: 6px;" + // Increased from 4px to 6px
                         "    pointer-events: none;" +
                         "    z-index: 9999;" + // Very high z-index to ensure visibility
                         "    border-radius: 1px;" +
@@ -897,185 +895,184 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
                         "    50% { opacity: 0.8; transform: scale(1.05); }" +
                         "}`;" +
                         "document.head.appendChild(style);");
-        
-        // NEW CODE: Apply custom caret color to the editor based on user's assigned color
+
+        // NEW CODE: Apply custom caret color to the editor based on user's assigned
+        // color
         editor.getElement().executeJs(
                 "this.inputElement.style.caretColor = $0;" +
                 // Add a subtle glow effect to the caret
-                "this.inputElement.style.textShadow = '0 0 0.5px ' + $0;" +
-                "console.log('Applied custom caret color: ' + $0);",
-                userColor
-        );
+                        "this.inputElement.style.textShadow = '0 0 0.5px ' + $0;" +
+                        "console.log('Applied custom caret color: ' + $0);",
+                userColor);
     }
 
     private void setupEnhancedCursorTracking() {
         editor.getElement().executeJs(
-            // Use a global registry approach instead of depending on $server
-            "window.vaadinCursorTracker = {" +
-                "positions: {}, " +
-                "sendPosition: function(pos) {" +
-                    "if (this.serverConnected) {" +
+                // Use a global registry approach instead of depending on $server
+                "window.vaadinCursorTracker = {" +
+                        "positions: {}, " +
+                        "sendPosition: function(pos) {" +
+                        "if (this.serverConnected) {" +
                         "console.log('Sending cursor position:', pos);" +
                         "this.element.$server.handleCursorPosition(pos);" +
                         "return true;" +
-                    "} else {" +
+                        "} else {" +
                         "console.log('Server connection not ready yet');" +
                         "return false;" +
-                    "}" +
-                "}, " +
-                "init: function(element) {" +
-                    "this.element = element;" +
-                    "this.serverConnected = !!element.$server;" +
-                    "this.setupEventHandlers();" +
-                    "this.startConnectionCheck();" +
-                "}," +
-                "setupEventHandlers: function() {" +
-                    "if (!this.element.inputElement) {" +
+                        "}" +
+                        "}, " +
+                        "init: function(element) {" +
+                        "this.element = element;" +
+                        "this.serverConnected = !!element.$server;" +
+                        "this.setupEventHandlers();" +
+                        "this.startConnectionCheck();" +
+                        "}," +
+                        "setupEventHandlers: function() {" +
+                        "if (!this.element.inputElement) {" +
                         "setTimeout(() => this.setupEventHandlers(), 200);" +
                         "return;" +
-                    "}" +
-                    
-                    "const tracker = this;" +
-                    "const input = this.element.inputElement;" +
-                    
-                    "const sendPos = function() {" +
-                        "tracker.sendPosition(input.selectionStart);" +
-                    "};" +
-                    
-                    "input.addEventListener('click', sendPos);" +
-                    "input.addEventListener('keyup', sendPos);" +
-                    "input.addEventListener('mouseup', sendPos);" +
-                    
-                    "input.addEventListener('keydown', function(e) {" +
-                        "if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End') {" +
-                            "setTimeout(sendPos, 10);" +
                         "}" +
-                    "});" +
-                    
-                    "input.addEventListener('focus', sendPos);" +
-                    
-                    "console.log('Event handlers registered');" +
-                "}," +
-                "startConnectionCheck: function() {" +
-                    "const tracker = this;" +
-                    "const checkConnection = function() {" +
+
+                        "const tracker = this;" +
+                        "const input = this.element.inputElement;" +
+
+                        "const sendPos = function() {" +
+                        "tracker.sendPosition(input.selectionStart);" +
+                        "};" +
+
+                        "input.addEventListener('click', sendPos);" +
+                        "input.addEventListener('keyup', sendPos);" +
+                        "input.addEventListener('mouseup', sendPos);" +
+
+                        "input.addEventListener('keydown', function(e) {" +
+                        "if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End') {" +
+                        "setTimeout(sendPos, 10);" +
+                        "}" +
+                        "});" +
+
+                        "input.addEventListener('focus', sendPos);" +
+
+                        "console.log('Event handlers registered');" +
+                        "}," +
+                        "startConnectionCheck: function() {" +
+                        "const tracker = this;" +
+                        "const checkConnection = function() {" +
                         "tracker.serverConnected = !!tracker.element.$server;" +
                         "if (tracker.serverConnected) {" +
-                            "console.log('Server connection established');" +
+                        "console.log('Server connection established');" +
                         "} else {" +
-                            "console.log('Waiting for server connection...');" +
-                            "setTimeout(checkConnection, 500);" +
+                        "console.log('Waiting for server connection...');" +
+                        "setTimeout(checkConnection, 500);" +
                         "}" +
-                    "};" +
-                    "checkConnection();" +
-                    
-                    "// Also set up a periodic position sender" +
-                    "setInterval(() => {" +
-                        "if (document.activeElement === tracker.element.inputElement) {" +
-                            "tracker.sendPosition(tracker.element.inputElement.selectionStart);" +
-                        "}" +
-                    "}, 2000);" +
-                "}" +
-            "};" +
-            "window.vaadinCursorTracker.init(this);"
-        );
+                        "};" +
+                        "checkConnection();" +
 
-        // Add this at the end of the method to create a custom cursor for the current user
+                        "// Also set up a periodic position sender" +
+                        "setInterval(() => {" +
+                        "if (document.activeElement === tracker.element.inputElement) {" +
+                        "tracker.sendPosition(tracker.element.inputElement.selectionStart);" +
+                        "}" +
+                        "}, 2000);" +
+                        "}" +
+                        "};" +
+                        "window.vaadinCursorTracker.init(this);");
+
+        // Add this at the end of the method to create a custom cursor for the current
+        // user
         editor.getElement().executeJs(
-            "(() => {" +
-                "const createLocalCursor = () => {" +
-                    "// Remove any existing local cursor" +
-                    "const existingCursor = document.getElementById('local-cursor-indicator');" +
-                    "if (existingCursor) existingCursor.remove();" +
-                    
-                    "// Create local cursor element" +
-                    "const cursor = document.createElement('div');" +
-                    "cursor.id = 'local-cursor-indicator';" +
-                    "cursor.style.position = 'absolute';" +
-                    "cursor.style.width = '6px';" +
-                    "cursor.style.height = '20px';" +
-                    "cursor.style.backgroundColor = $0;" + // User's color
-                    "cursor.style.opacity = '0.7';" +
-                    "cursor.style.pointerEvents = 'none';" +
-                    "cursor.style.zIndex = '9998';" + // Below remote cursors
-                    "cursor.style.boxShadow = '0 0 8px ' + $0;" +
-                    "cursor.style.transition = 'left 0.1s, top 0.1s';" +
-                    
-                    "// Add to DOM" +
-                    "document.body.appendChild(cursor);" +
-                    
-                    "// Add a label with user name (you)" +
-                    "const label = document.createElement('div');" +
-                    "label.textContent = 'You';" +
-                    "label.style.position = 'absolute';" +
-                    "label.style.top = '-20px';" +
-                    "label.style.left = '0';" +
-                    "label.style.backgroundColor = $0;" +
-                    "label.style.color = 'white';" +
-                    "label.style.padding = '2px 5px';" +
-                    "label.style.borderRadius = '3px';" +
-                    "label.style.fontSize = '12px';" +
-                    "label.style.fontWeight = 'bold';" +
-                    "label.style.whiteSpace = 'nowrap';" +
-                    "cursor.appendChild(label);" +
-                    
-                    "return cursor;" +
-                "};" +
-                
-                "// Create the cursor" +
-                "const localCursor = createLocalCursor();" +
-                
-                "// Function to update its position" + 
-                "const updatePosition = () => {" +
-                    "if (!this.inputElement) return;" +
-                    
-                    "const ta = this.inputElement;" +
-                    "const pos = ta.selectionStart;" +
-                    "const rect = ta.getBoundingClientRect();" +
-                    
-                    "const text = ta.value.substring(0, pos);" +
-                    "const lines = text.split('\\n');" +
-                    "const lineIdx = lines.length - 1;" +
-                    "const lineText = lines[lineIdx];" +
-                    "const charWidth = 8;" + 
-                    "const lineHeight = 20;" +
-                    
-                    "const xPos = lineText.length * charWidth + 4;" +
-                    "const yPos = lineIdx * lineHeight + 4;" +
-                    
-                    "localCursor.style.left = (rect.left + xPos) + 'px';" +
-                    "localCursor.style.top = (rect.top + yPos) + 'px';" +
-                "};" +
-                
-                "// Update position on various events" + 
-                "this.inputElement.addEventListener('click', updatePosition);" +
-                "this.inputElement.addEventListener('keyup', updatePosition);" +
-                "this.inputElement.addEventListener('mouseup', updatePosition);" +
-                "this.inputElement.addEventListener('focus', updatePosition);" +
-                
-                "// Initial position update" +
-                "setTimeout(updatePosition, 100);" +
-                
-                "// Periodic updates" +
-                "setInterval(updatePosition, 500);" +
-            "})();",
-            userColor
-        );
+                "(() => {" +
+                        "const createLocalCursor = () => {" +
+                        "// Remove any existing local cursor" +
+                        "const existingCursor = document.getElementById('local-cursor-indicator');" +
+                        "if (existingCursor) existingCursor.remove();" +
+
+                        "// Create local cursor element" +
+                        "const cursor = document.createElement('div');" +
+                        "cursor.id = 'local-cursor-indicator';" +
+                        "cursor.style.position = 'absolute';" +
+                        "cursor.style.width = '6px';" +
+                        "cursor.style.height = '20px';" +
+                        "cursor.style.backgroundColor = $0;" + // User's color
+                        "cursor.style.opacity = '0.7';" +
+                        "cursor.style.pointerEvents = 'none';" +
+                        "cursor.style.zIndex = '9998';" + // Below remote cursors
+                        "cursor.style.boxShadow = '0 0 8px ' + $0;" +
+                        "cursor.style.transition = 'left 0.1s, top 0.1s';" +
+
+                        "// Add to DOM" +
+                        "document.body.appendChild(cursor);" +
+
+                        "// Add a label with user name (you)" +
+                        "const label = document.createElement('div');" +
+                        "label.textContent = 'You';" +
+                        "label.style.position = 'absolute';" +
+                        "label.style.top = '-20px';" +
+                        "label.style.left = '0';" +
+                        "label.style.backgroundColor = $0;" +
+                        "label.style.color = 'white';" +
+                        "label.style.padding = '2px 5px';" +
+                        "label.style.borderRadius = '3px';" +
+                        "label.style.fontSize = '12px';" +
+                        "label.style.fontWeight = 'bold';" +
+                        "label.style.whiteSpace = 'nowrap';" +
+                        "cursor.appendChild(label);" +
+
+                        "return cursor;" +
+                        "};" +
+
+                        "// Create the cursor" +
+                        "const localCursor = createLocalCursor();" +
+
+                        "// Function to update its position" +
+                        "const updatePosition = () => {" +
+                        "if (!this.inputElement) return;" +
+
+                        "const ta = this.inputElement;" +
+                        "const pos = ta.selectionStart;" +
+                        "const rect = ta.getBoundingClientRect();" +
+
+                        "const text = ta.value.substring(0, pos);" +
+                        "const lines = text.split('\\n');" +
+                        "const lineIdx = lines.length - 1;" +
+                        "const lineText = lines[lineIdx];" +
+                        "const charWidth = 8;" +
+                        "const lineHeight = 20;" +
+
+                        "const xPos = lineText.length * charWidth + 4;" +
+                        "const yPos = lineIdx * lineHeight + 4;" +
+
+                        "localCursor.style.left = (rect.left + xPos) + 'px';" +
+                        "localCursor.style.top = (rect.top + yPos) + 'px';" +
+                        "};" +
+
+                        "// Update position on various events" +
+                        "this.inputElement.addEventListener('click', updatePosition);" +
+                        "this.inputElement.addEventListener('keyup', updatePosition);" +
+                        "this.inputElement.addEventListener('mouseup', updatePosition);" +
+                        "this.inputElement.addEventListener('focus', updatePosition);" +
+
+                        "// Initial position update" +
+                        "setTimeout(updatePosition, 100);" +
+
+                        "// Periodic updates" +
+                        "setInterval(updatePosition, 500);" +
+                        "})();",
+                userColor);
     }
 
     private void schedulePeriodicCursorUpdates() {
         getUI().ifPresent(ui -> {
             ui.setPollInterval(500); // Poll every 500ms to keep UI responsive
-            
+
             new Thread(() -> {
                 while (true) {
                     try {
-                        Thread.sleep(800); // Update every 800ms 
+                        Thread.sleep(800); // Update every 800ms
                         ui.access(() -> {
                             if (!userRole.equals("viewer") && !sessionCode.isEmpty()) {
                                 // Re-broadcast your cursor position regularly
                                 Broadcaster.broadcastCursor(userId, cursorPosition, userColor, sessionCode);
-                                
+
                                 // Always re-render cursors to ensure they stay visible
                                 renderRemoteCursors();
                             }
@@ -1090,151 +1087,150 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
 
     private void addCursorStyles() {
         getElement().executeJs(
-            "const style = document.createElement('style');" +
-            "style.id = 'cursor-styles-direct';" +
-            "style.textContent = `" +
-                ".remote-cursor {" +
-                "  position: fixed;" + // Use fixed positioning for viewport coordinates
-                "  width: 4px;" +
-                "  height: 20px;" +
-                "  z-index: 9999;" +
-                "  pointer-events: none;" +
-                "  animation: cursor-blink 1s infinite;" +
-                "  box-shadow: 0 0 8px currentColor;" + // Add glow effect
-                "}" +
-                ".cursor-label {" +
-                "  position: absolute;" +
-                "  top: -20px;" +
-                "  left: 0;" +
-                "  background-color: inherit;" +
-                "  color: white;" +
-                "  padding: 2px 5px;" +
-                "  border-radius: 3px;" +
-                "  font-size: 12px;" +
-                "  font-weight: bold;" + // Make text bold
-                "  white-space: nowrap;" +
-                "  z-index: 10000;" +
-                "  box-shadow: 0 1px 4px rgba(0,0,0,0.4);" + // Add shadow
-                "}" +
-                "@keyframes cursor-blink {" +
-                "  0%, 100% { opacity: 1; }" +
-                "  50% { opacity: 0.6; }" +
-                "}" +
-            "`;" +
-            "document.head.appendChild(style);"
-        );
+                "const style = document.createElement('style');" +
+                        "style.id = 'cursor-styles-direct';" +
+                        "style.textContent = `" +
+                        ".remote-cursor {" +
+                        "  position: fixed;" + // Use fixed positioning for viewport coordinates
+                        "  width: 4px;" +
+                        "  height: 20px;" +
+                        "  z-index: 9999;" +
+                        "  pointer-events: none;" +
+                        "  animation: cursor-blink 1s infinite;" +
+                        "  box-shadow: 0 0 8px currentColor;" + // Add glow effect
+                        "}" +
+                        ".cursor-label {" +
+                        "  position: absolute;" +
+                        "  top: -20px;" +
+                        "  left: 0;" +
+                        "  background-color: inherit;" +
+                        "  color: white;" +
+                        "  padding: 2px 5px;" +
+                        "  border-radius: 3px;" +
+                        "  font-size: 12px;" +
+                        "  font-weight: bold;" + // Make text bold
+                        "  white-space: nowrap;" +
+                        "  z-index: 10000;" +
+                        "  box-shadow: 0 1px 4px rgba(0,0,0,0.4);" + // Add shadow
+                        "}" +
+                        "@keyframes cursor-blink {" +
+                        "  0%, 100% { opacity: 1; }" +
+                        "  50% { opacity: 0.6; }" +
+                        "}" +
+                        "`;" +
+                        "document.head.appendChild(style);");
     }
 
     private void setupSelectionTracking() {
         editor.getElement().executeJs(
-            "(() => {" +
-            "  const element = this;" +
-            "  let lastSelectionState = false;" +
-            "  " +
-            "  function waitForElements() {" +
-            "    if (!element.inputElement) {" +
-            "      console.log('Waiting for input element to initialize...');" +
-            "      setTimeout(waitForElements, 200);" +
-            "      return;" +
-            "    }" +
-            "    " +
-            "    const inputElement = element.inputElement;" +
-            "    console.log('Input element ready for selection tracking');" +
-            "    " +
-            "    // Check selection and notify server if changed" +
-            "    function notifySelectionChange() {" +
-            "      const start = inputElement.selectionStart;" +
-            "      const end = inputElement.selectionEnd;" +
-            "      const hasSelection = start !== end;" +
-            "      " +
-            "      // Only send updates when state changes to avoid flooding" +
-            "      if (hasSelection !== lastSelectionState) {" +
-            "        lastSelectionState = hasSelection;" +
-            "        console.log('Selection changed: ' + (hasSelection ? 'text selected' : 'no selection'));" +
-            "        " +
-            "        // Try to notify server, with retries" +
-            "        function tryNotifyServer(attempts) {" +
-            "          if (attempts <= 0) return;" +
-            "          " +
-            "          if (element.$server) {" +
-            "            try {" +
-            "              element.$server.updateSelectionState(hasSelection);" +
-            "              console.log('Server notified of selection state: ' + hasSelection);" +
-            "            } catch (e) {" +
-            "              console.error('Failed to notify server: ', e);" +
-            "              setTimeout(() => tryNotifyServer(attempts - 1), 100);" +
-            "            }" +
-            "          } else {" +
-            "            console.log('Server not available, retrying in 200ms...');" +
-            "            setTimeout(() => tryNotifyServer(attempts - 1), 200);" +
-            "          }" +
-            "        }" +
-            "        " +
-            "        // Try with 5 attempts" +
-            "        tryNotifyServer(5);" +
-            "      }" +
-            "    }" +
-            "    " +
-            "    // Direct event handlers for selection changes" +
-            "    ['mouseup', 'keyup', 'selectionchange'].forEach(eventType => {" +
-            "      inputElement.addEventListener(eventType, () => {" +
-            "        notifySelectionChange();" +
-            "      });" +
-            "    });" +
-            "    " +
-            "    // For browsers that support the selectionchange event at document level" +
-            "    document.addEventListener('selectionchange', () => {" +
-            "      if (document.activeElement === inputElement) {" +
-            "        notifySelectionChange();" +
-            "      }" +
-            "    });" +
-            "    " +
-            "    // Also run selection check on mouse down/up" +
-            "    inputElement.addEventListener('mousedown', () => {" +
-            "      // Check after a small delay to allow selection to complete" +
-            "      setTimeout(notifySelectionChange, 10);" +
-            "    });" +
-            "    " +
-            "    // Initial check and periodic checks" +
-            "    setTimeout(notifySelectionChange, 500);" +
-            "    setInterval(notifySelectionChange, 1000); // Backup check every second" +
-            "  }" +
-            "  " +
-            "  // Start watching" +
-            "  waitForElements();" +
-            "})();"
-        );
+                "(() => {" +
+                        "  const element = this;" +
+                        "  let lastSelectionState = false;" +
+                        "  " +
+                        "  function waitForElements() {" +
+                        "    if (!element.inputElement) {" +
+                        "      console.log('Waiting for input element to initialize...');" +
+                        "      setTimeout(waitForElements, 200);" +
+                        "      return;" +
+                        "    }" +
+                        "    " +
+                        "    const inputElement = element.inputElement;" +
+                        "    console.log('Input element ready for selection tracking');" +
+                        "    " +
+                        "    // Check selection and notify server if changed" +
+                        "    function notifySelectionChange() {" +
+                        "      const start = inputElement.selectionStart;" +
+                        "      const end = inputElement.selectionEnd;" +
+                        "      const hasSelection = start !== end;" +
+                        "      " +
+                        "      // Only send updates when state changes to avoid flooding" +
+                        "      if (hasSelection !== lastSelectionState) {" +
+                        "        lastSelectionState = hasSelection;" +
+                        "        console.log('Selection changed: ' + (hasSelection ? 'text selected' : 'no selection'));"
+                        +
+                        "        " +
+                        "        // Try to notify server, with retries" +
+                        "        function tryNotifyServer(attempts) {" +
+                        "          if (attempts <= 0) return;" +
+                        "          " +
+                        "          if (element.$server) {" +
+                        "            try {" +
+                        "              element.$server.updateSelectionState(hasSelection);" +
+                        "              console.log('Server notified of selection state: ' + hasSelection);" +
+                        "            } catch (e) {" +
+                        "              console.error('Failed to notify server: ', e);" +
+                        "              setTimeout(() => tryNotifyServer(attempts - 1), 100);" +
+                        "            }" +
+                        "          } else {" +
+                        "            console.log('Server not available, retrying in 200ms...');" +
+                        "            setTimeout(() => tryNotifyServer(attempts - 1), 200);" +
+                        "          }" +
+                        "        }" +
+                        "        " +
+                        "        // Try with 5 attempts" +
+                        "        tryNotifyServer(5);" +
+                        "      }" +
+                        "    }" +
+                        "    " +
+                        "    // Direct event handlers for selection changes" +
+                        "    ['mouseup', 'keyup', 'selectionchange'].forEach(eventType => {" +
+                        "      inputElement.addEventListener(eventType, () => {" +
+                        "        notifySelectionChange();" +
+                        "      });" +
+                        "    });" +
+                        "    " +
+                        "    // For browsers that support the selectionchange event at document level" +
+                        "    document.addEventListener('selectionchange', () => {" +
+                        "      if (document.activeElement === inputElement) {" +
+                        "        notifySelectionChange();" +
+                        "      }" +
+                        "    });" +
+                        "    " +
+                        "    // Also run selection check on mouse down/up" +
+                        "    inputElement.addEventListener('mousedown', () => {" +
+                        "      // Check after a small delay to allow selection to complete" +
+                        "      setTimeout(notifySelectionChange, 10);" +
+                        "    });" +
+                        "    " +
+                        "    // Initial check and periodic checks" +
+                        "    setTimeout(notifySelectionChange, 500);" +
+                        "    setInterval(notifySelectionChange, 1000); // Backup check every second" +
+                        "  }" +
+                        "  " +
+                        "  // Start watching" +
+                        "  waitForElements();" +
+                        "})();");
     }
 
     private void addComment() {
         // Define the js variable first
         PendingJavaScriptResult js = editor.getElement().executeJs(
-            "return {start: this.inputElement.selectionStart, end: this.inputElement.selectionEnd}");
-        
+                "return {start: this.inputElement.selectionStart, end: this.inputElement.selectionEnd}");
+
         // Then use it
         js.then(JsonObject.class, range -> {
             final int selStart = (int) range.getNumber("start");
             final int selEnd = (int) range.getNumber("end");
-    
+
             if (selStart < selEnd) {
                 // Show comment dialog
                 TextField commentField = new TextField("Comment");
                 commentField.setWidth("300px");
-    
+
                 Dialog dialog = new Dialog();
                 dialog.add(new Span("Add comment to selected text:"));
                 dialog.add(commentField);
-    
+
                 Button saveButton = new Button("Save Comment", saveEvent -> {
                     String commentText = commentField.getValue();
                     if (!commentText.isEmpty()) {
-                        Comment comment = crdtBuffer.addComment(userId, userColor, commentText, selStart, selEnd);
+                        Comment comment = getCrdtBuffer().addComment(userId, userColor, commentText, selStart, selEnd);
                         Broadcaster.broadcastComment(comment, sessionCode);
                         updateCommentsPanel();
                         dialog.close();
                     }
                 });
-    
+
                 dialog.add(new HorizontalLayout(saveButton,
                         new Button("Cancel", cancelEvent -> dialog.close())));
                 dialog.open();
@@ -1245,7 +1241,7 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
     @Override
     public void receiveComment(Comment comment) {
         getUI().ifPresent(ui -> ui.access(() -> {
-            crdtBuffer.addExistingComment(comment);
+            getCrdtBuffer().addExistingComment(comment);
             updateCommentsPanel();
         }));
     }
@@ -1253,7 +1249,7 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
     @Override
     public void receiveCommentRemoval(String commentId) {
         getUI().ifPresent(ui -> ui.access(() -> {
-            crdtBuffer.removeComment(commentId);
+            getCrdtBuffer().removeComment(commentId);
             updateCommentsPanel();
         }));
     }
@@ -1261,70 +1257,69 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
     private void updateCommentsPanel() {
         // Clear all existing comments from the UI panel
         commentsPanel.removeAll();
-        commentsPanel.add(new H3("Comments (" + crdtBuffer.getComments().size() + ")"));
-        
+        commentsPanel.add(new H3("Comments (" + getCrdtBuffer().getComments().size() + ")"));
+
         // Get all comments and sort them by position in the document
-        List<Comment> sortedComments = new ArrayList<>(crdtBuffer.getComments());
+        List<Comment> sortedComments = new ArrayList<>(getCrdtBuffer().getComments());
         sortedComments.sort(Comparator.comparingInt(Comment::getStartPosition));
-        
+
         // Add each comment to the panel
         for (Comment comment : sortedComments) {
             // Create a card for each comment
             Div card = new Div();
             card.getStyle()
-                .set("background-color", "white")
-                .set("border-radius", "4px")
-                .set("padding", "10px")
-                .set("margin-bottom", "10px")
-                .set("box-shadow", "0 1px 3px rgba(0,0,0,0.1)")
-                .set("border-left", "4px solid " + comment.getAuthorColor());
-            
+                    .set("background-color", "white")
+                    .set("border-radius", "4px")
+                    .set("padding", "10px")
+                    .set("margin-bottom", "10px")
+                    .set("box-shadow", "0 1px 3px rgba(0,0,0,0.1)")
+                    .set("border-left", "4px solid " + comment.getAuthorColor());
+
             // Author info
             Span author = new Span(comment.getAuthorId().substring(0, 6));
             author.getStyle()
-                .set("font-weight", "bold")
-                .set("color", comment.getAuthorColor());
-            
+                    .set("font-weight", "bold")
+                    .set("color", comment.getAuthorColor());
+
             // Comment text
             Paragraph content = new Paragraph(comment.getContent());
             content.getStyle().set("margin", "5px 0");
-            
+
             // Commented text preview
-            String documentText = crdtBuffer.getDocument();
+            String documentText = getCrdtBuffer().getDocument();
             String commentedText = "";
             int start = comment.getStartPosition();
             int end = comment.getEndPosition();
             if (start >= 0 && end <= documentText.length() && start < end) {
                 commentedText = documentText.substring(start, end);
             }
-            
+
             Div textPreview = new Div();
             textPreview.getStyle()
-                .set("background-color", "#f0f0f0")
-                .set("padding", "5px")
-                .set("border-radius", "3px")
-                .set("margin", "5px 0")
-                .set("font-family", "monospace")
-                .set("overflow", "hidden")
-                .set("text-overflow", "ellipsis");
+                    .set("background-color", "#f0f0f0")
+                    .set("padding", "5px")
+                    .set("border-radius", "3px")
+                    .set("margin", "5px 0")
+                    .set("font-family", "monospace")
+                    .set("overflow", "hidden")
+                    .set("text-overflow", "ellipsis");
             textPreview.setText("\"" + commentedText + "\"");
-            
+
             // Jump to comment button
             Button jumpButton = new Button("Jump to", e -> {
                 editor.focus();
                 // Select the commented text
                 editor.getElement().executeJs(
-                    "this.inputElement.setSelectionRange($0, $1); this.inputElement.focus();",
-                    comment.getStartPosition(), comment.getEndPosition()
-                );
+                        "this.inputElement.setSelectionRange($0, $1); this.inputElement.focus();",
+                        comment.getStartPosition(), comment.getEndPosition());
             });
             jumpButton.getStyle().set("margin-top", "5px");
-            
+
             // Add all components to the card
             card.add(author, content, textPreview, jumpButton);
             commentsPanel.add(card);
         }
-        
+
         // Add a message if there are no comments
         if (sortedComments.isEmpty()) {
             Span noComments = new Span("No comments yet. Select text and use the Comment button to add comments.");
@@ -1338,42 +1333,62 @@ public class EditorView extends VerticalLayout implements Broadcaster.BroadcastL
         // First, identify all specific nodes that need deletion
         List<String> nodesToDelete = new ArrayList<>();
         for (int pos = start; pos <= endOld; pos++) {
-            String nodeId = crdtBuffer.getNodeIdAtPosition(pos);
+            String nodeId = getCrdtBuffer().getNodeIdAtPosition(pos);
             if (!nodeId.equals("0")) {
                 nodesToDelete.add(nodeId);
                 System.out.println("Marking node for deletion: " + nodeId + " at position " + pos);
             }
         }
-        
+
         // Check for comments that should be deleted
         List<Comment> commentsToDelete = new ArrayList<>();
-        for (Comment comment : crdtBuffer.getComments()) {
+        for (Comment comment : getCrdtBuffer().getComments()) {
             // If the comment's entire text range is within the deleted range, or if the
             // comment start is in the deletion range, mark it for removal
             if ((comment.getStartPosition() >= start && comment.getEndPosition() <= endOld) ||
-                (comment.getStartPosition() >= start && comment.getStartPosition() <= endOld)) {
+                    (comment.getStartPosition() >= start && comment.getStartPosition() <= endOld)) {
                 commentsToDelete.add(comment);
-                System.out.println("Marking comment for deletion: " + comment.getCommentId() + 
-                                   " at position " + comment.getStartPosition() + "-" + 
-                                   comment.getEndPosition());
+                System.out.println("Marking comment for deletion: " + comment.getCommentId() +
+                        " at position " + comment.getStartPosition() + "-" +
+                        comment.getEndPosition());
             }
         }
-        
+
+        // Then delete nodes one by one
         // Then delete nodes one by one
         for (String nodeId : nodesToDelete) {
-            String[] parts = nodeId.split("-");
-            System.out.println("Deleting node: " + nodeId);
-            crdtBuffer.delete(parts[0], Integer.parseInt(parts[1]));
+            try {
+                // Fix: Handle the "session-a-7" format correctly
+                String[] parts = nodeId.split("-");
+                if (parts.length == 3) {
+                    // Format is like "session-a-7"
+                    String siteId = parts[0] + "-" + parts[1];
+                    int clock = Integer.parseInt(parts[2]);
+                    System.out.println("Deleting node: " + nodeId + " (siteId: " + siteId + ", clock: " + clock + ")");
+                    getCrdtBuffer().delete(siteId, clock);
+                } else if (parts.length == 2) {
+                    // Format is like "session-7"
+                    String siteId = parts[0];
+                    int clock = Integer.parseInt(parts[1]);
+                    System.out.println("Deleting node: " + nodeId + " (siteId: " + siteId + ", clock: " + clock + ")");
+                    getCrdtBuffer().delete(siteId, clock);
+                } else {
+                    System.err.println("Unexpected node ID format: " + nodeId);
+                }
+            } catch (Exception e) {
+                System.err.println("Error deleting node " + nodeId + ": " + e.getMessage());
+                // Continue with other nodes even if this one fails
+            }
         }
-        
+
         // Delete the affected comments
         for (Comment comment : commentsToDelete) {
-            crdtBuffer.removeComment(comment.getCommentId());
+            getCrdtBuffer().removeComment(comment.getCommentId());
             // Notify others that the comment has been removed
             Broadcaster.broadcastCommentRemoval(comment.getCommentId(), sessionCode);
             System.out.println("Deleted comment: " + comment.getCommentId());
         }
-        
+
         // Update the comments panel if any comments were deleted
         if (!commentsToDelete.isEmpty()) {
             updateCommentsPanel();
