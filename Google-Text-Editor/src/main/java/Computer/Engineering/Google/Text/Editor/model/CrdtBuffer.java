@@ -1,8 +1,10 @@
 package Computer.Engineering.Google.Text.Editor.model;
 
 import java.util.*;
+import java.util.Iterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.util.stream.Collectors;
 
 public class CrdtBuffer {
     private List<CrdtNode> nodes;
@@ -10,6 +12,7 @@ public class CrdtBuffer {
     private int clock;
     private Set<String> deletedSet;
     private List<CrdtNode> deletedNodes = new ArrayList<>();
+    private final List<Comment> comments = new ArrayList<>();
     Logger logger = LoggerFactory.getLogger(CrdtBuffer.class);
     private Stack<CrdtNode> operationHistory = new Stack<>();
     private Stack<CrdtNode> redoHistory = new Stack<>();
@@ -192,6 +195,17 @@ public class CrdtBuffer {
     }
 
     public void delete(String siteId, int clock) {
+        String nodeId = siteId + "-" + clock;
+
+        // Find comments attached to this node
+        List<Comment> commentsToRemove = comments.stream()
+                .filter(c -> c.isAttachedToNode(nodeId))
+                .collect(Collectors.toList());
+
+        // Remove these comments
+        comments.removeAll(commentsToRemove);
+
+        // Continue with normal deletion
         CrdtNode nodeToDelete = null;
         for (CrdtNode node : nodes) {
             if (node.getSiteId().equals(siteId) && node.getClock() == clock) {
@@ -222,6 +236,9 @@ public class CrdtBuffer {
 
             logger.debug("Deleted node: " + nodeToDelete.getUniqueId());
         }
+
+        // Update remaining comment positions
+        updateCommentPositions();
     }
 
     public void printBuffer() {
@@ -282,6 +299,7 @@ public class CrdtBuffer {
         logger.debug("Inserted node: " + newNode);
         return newNode.getUniqueId();
     }
+
 
 
     /*
@@ -388,5 +406,87 @@ public class CrdtBuffer {
     }
 }
 
-// test cases delete and insert
-// undo and redo
+
+    // Add a comment to a text selection
+    public Comment addComment(String authorId, String authorColor, String content, int startPos, int endPos) {
+        if (startPos >= endPos || startPos < 0 || endPos > getDocument().length()) {
+            throw new IllegalArgumentException("Invalid comment range");
+        }
+
+        String startNodeId = getNodeIdAtPosition(startPos);
+        String endNodeId = getNodeIdAtPosition(endPos - 1);
+
+        Comment comment = new Comment(authorId, authorColor, content, startNodeId, endNodeId, startPos, endPos);
+        comments.add(comment);
+        return comment;
+    }
+
+    // Get all comments
+    public List<Comment> getComments() {
+        return new ArrayList<>(comments);
+    }
+
+    // Removed unused buildNodeIdList() method to resolve compilation errors.
+
+    // Helper method to get a list of all node IDs in the document
+    public List<String> getNodeIdList() {
+        Map<String, List<CrdtNode>> childrenMap = new HashMap<>();
+        for (CrdtNode node : nodes) {
+            if (!node.isDeleted()) {
+                childrenMap.computeIfAbsent(node.getParentId(), k -> new ArrayList<>()).add(node);
+            }
+        }
+
+        List<String> nodeIds = new ArrayList<>();
+        buildNodeIdList("0", childrenMap, nodeIds);
+        return nodeIds;
+    }
+
+    // Update comment positions after document changes
+    public void updateCommentPositions() {
+        // String document = getDocument();
+        Map<String, Integer> nodePositions = new HashMap<>();
+
+        // Map node IDs to current positions
+        List<String> nodeIds = getNodeIdList();
+        for (int i = 0; i < nodeIds.size(); i++) {
+            nodePositions.put(nodeIds.get(i), i);
+        }
+
+        // Update each comment's positions
+        for (Comment comment : comments) {
+            Integer startPos = nodePositions.get(comment.getStartNodeId());
+            Integer endPos = nodePositions.get(comment.getEndNodeId());
+
+            // If both nodes still exist, update positions
+            if (startPos != null && endPos != null) {
+                comment.updatePositions(startPos, endPos + 1);
+            }
+        }
+    }
+
+    public void addExistingComment(Comment comment) {
+        // Check if comment already exists
+        if (comments.stream().noneMatch(c -> c.getCommentId().equals(comment.getCommentId()))) {
+            comments.add(comment);
+        }
+    }
+
+    /**
+     * Removes a comment with the specified ID from the buffer
+     * 
+     * @param commentId The ID of the comment to remove
+     * @return true if the comment was found and removed, false otherwise
+     */
+    public boolean removeComment(String commentId) {
+        // Use Iterator to safely remove while iterating
+        for (Iterator<Comment> iterator = comments.iterator(); iterator.hasNext();) {
+            Comment comment = iterator.next();
+            if (comment.getCommentId().equals(commentId)) {
+                iterator.remove();
+                return true;
+            }
+        }
+        return false;
+    }
+}
